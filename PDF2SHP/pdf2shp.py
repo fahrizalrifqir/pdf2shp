@@ -3,57 +3,67 @@ import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, re
 from shapely.geometry import Point, Polygon
-import fitz  # PyMuPDF
 import folium
 from streamlit_folium import st_folium
+import pdfplumber
+from pdf2image import convert_from_bytes
+import pytesseract
+from PIL import Image
 
 st.set_page_config(page_title="PDF Koordinat → SHP/KML", layout="wide")
 st.title("PDF Koordinat → Shapefile & KML Converter")
 
 uploaded_file = st.file_uploader("Upload file PDF", type=["pdf"])
 
-if uploaded_file:
-    # Baca PDF dengan PyMuPDF
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-
-    # Ambil semua teks dari PDF
-    all_text = ""
-    for page in doc:
-        all_text += page.get_text("text") + "\n"
-
-    # Cari semua angka float
-    numbers = re.findall(r"-?\d+\.\d+", all_text)
-
+def extract_coords_from_text(text):
+    numbers = re.findall(r"-?\d+\.\d+", text)
     coords = []
     for i in range(0, len(numbers) - 1, 2):
         try:
             lon, lat = float(numbers[i]), float(numbers[i + 1])
-            # Filter koordinat Indonesia (approx 95–141 BT, -11 – 6 LS/LU)
-            if 95 <= lon <= 141 and -11 <= lat <= 6:
+            if 95 <= lon <= 141 and -11 <= lat <= 6:  # filter Indonesia
                 coords.append((lon, lat))
         except:
             continue
+    return coords
 
+if uploaded_file:
+    coords = []
+
+    # --- 1. Coba pdfplumber ---
+    all_text = ""
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                all_text += text + "\n"
+    coords = extract_coords_from_text(all_text)
+
+    # --- 2. Kalau gagal, fallback OCR ---
+    if not coords:
+        st.info("Teks tidak terbaca dengan pdfplumber, coba OCR...")
+        images = convert_from_bytes(uploaded_file.read())
+        ocr_text = ""
+        for img in images:
+            ocr_text += pytesseract.image_to_string(img) + "\n"
+        coords = extract_coords_from_text(ocr_text)
+
+    # --- Jika koordinat ketemu ---
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
 
-        # Buat GeoDataFrame (point)
         gdf_points = gpd.GeoDataFrame(
             pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
             geometry=[Point(xy) for xy in coords],
             crs="EPSG:4326"
         )
 
-        # Buat polygon jika titik lebih dari 2
         gdf_polygon = None
         if len(coords) > 2:
-            # pastikan polygon tertutup
             if coords[0] != coords[-1]:
-                coords.append(coords[0])
+                coords.append(coords[0])  # tutup polygon
             poly = Polygon(coords)
-            gdf_polygon = gpd.GeoDataFrame(
-                geometry=[poly], crs="EPSG:4326"
-            )
+            gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
         # === PREVIEW PETA ===
         m = folium.Map(location=[coords[0][1], coords[0][0]], zoom_start=17)
@@ -80,35 +90,20 @@ if uploaded_file:
                     z.write(fpath, os.path.basename(fpath))
 
         with open(zip_filename, "rb") as f:
-            st.download_button(
-                "Download Shapefile (ZIP)",
-                f,
-                file_name="koordinat_shp.zip",
-                mime="application/zip"
-            )
+            st.download_button("Download Shapefile (ZIP)", f, "koordinat_shp.zip", mime="application/zip")
 
         # === SIMPAN KML (Point) ===
         kml_filename = "koordinat.kml"
         gdf_points.to_file(kml_filename, driver="KML")
         with open(kml_filename, "rb") as f:
-            st.download_button(
-                "Download KML (Titik)",
-                f,
-                file_name="koordinat.kml",
-                mime="application/vnd.google-earth.kml+xml"
-            )
+            st.download_button("Download KML (Titik)", f, "koordinat.kml", mime="application/vnd.google-earth.kml+xml")
 
         # === SIMPAN KML (Polygon) ===
         if gdf_polygon is not None:
             kml_poly_filename = "koordinat_polygon.kml"
             gdf_polygon.to_file(kml_poly_filename, driver="KML")
             with open(kml_poly_filename, "rb") as f:
-                st.download_button(
-                    "Download KML (Polygon)",
-                    f,
-                    file_name="koordinat_polygon.kml",
-                    mime="application/vnd.google-earth.kml+xml"
-                )
+                st.download_button("Download KML (Polygon)", f, "koordinat_polygon.kml", mime="application/vnd.google-earth.kml+xml")
 
     else:
-        st.warning("Tidak ada koordinat yang ditemukan di PDF.")
+        st.error("Tidak ada koordinat yang bisa diekstrak, bahkan dengan OCR.")
