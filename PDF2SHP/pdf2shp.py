@@ -6,9 +6,6 @@ from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
-from pdf2image import convert_from_bytes
-import pytesseract
-from PIL import Image
 
 st.set_page_config(page_title="PDF Koordinat → SHP/KML", layout="wide")
 st.title("PDF Koordinat → Shapefile & KML Converter")
@@ -30,25 +27,16 @@ def extract_coords_from_text(text):
 if uploaded_file:
     coords = []
 
-    # --- 1. Coba pdfplumber ---
+    # --- ekstrak teks dengan pdfplumber ---
     all_text = ""
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if text:
                 all_text += text + "\n"
+
     coords = extract_coords_from_text(all_text)
 
-    # --- 2. Kalau gagal, fallback OCR ---
-    if not coords:
-        st.info("Teks tidak terbaca dengan pdfplumber, coba OCR...")
-        images = convert_from_bytes(uploaded_file.read())
-        ocr_text = ""
-        for img in images:
-            ocr_text += pytesseract.image_to_string(img) + "\n"
-        coords = extract_coords_from_text(ocr_text)
-
-    # --- Jika koordinat ketemu ---
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
 
@@ -106,4 +94,4 @@ if uploaded_file:
                 st.download_button("Download KML (Polygon)", f, "koordinat_polygon.kml", mime="application/vnd.google-earth.kml+xml")
 
     else:
-        st.error("Tidak ada koordinat yang bisa diekstrak, bahkan dengan OCR.")
+        st.error("Tidak ada koordinat yang terbaca dari PDF (mungkin tabel berupa gambar).")
