@@ -16,18 +16,23 @@ if uploaded_file:
     # Baca PDF dengan PyMuPDF
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
 
-    coords = []
+    # Ambil semua teks dari PDF
+    all_text = ""
     for page in doc:
-        text = page.get_text("text")
-        for line in text.split("\n"):
-            # Cari dua angka float dalam setiap baris (lon, lat)
-            numbers = re.findall(r"-?\d+\.\d+", line)
-            if len(numbers) >= 2:
-                try:
-                    lon, lat = float(numbers[0]), float(numbers[1])
-                    coords.append((lon, lat))
-                except:
-                    continue
+        all_text += page.get_text("text") + "\n"
+
+    # Cari semua angka float
+    numbers = re.findall(r"-?\d+\.\d+", all_text)
+
+    coords = []
+    for i in range(0, len(numbers) - 1, 2):
+        try:
+            lon, lat = float(numbers[i]), float(numbers[i + 1])
+            # Filter koordinat Indonesia (approx 95–141 BT, -11 – 6 LS/LU)
+            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                coords.append((lon, lat))
+        except:
+            continue
 
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
@@ -39,9 +44,12 @@ if uploaded_file:
             crs="EPSG:4326"
         )
 
-        # Buat polygon jika titik lebih dari 2 dan membentuk area
+        # Buat polygon jika titik lebih dari 2
         gdf_polygon = None
         if len(coords) > 2:
+            # pastikan polygon tertutup
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
             poly = Polygon(coords)
             gdf_polygon = gpd.GeoDataFrame(
                 geometry=[poly], crs="EPSG:4326"
@@ -49,10 +57,8 @@ if uploaded_file:
 
         # === PREVIEW PETA ===
         m = folium.Map(location=[coords[0][1], coords[0][0]], zoom_start=17)
-        # garis polyline
         folium.PolyLine([(lat, lon) for lon, lat in coords],
                         color="blue", weight=2.5).add_to(m)
-        # titik koordinat
         for i, (lon, lat) in enumerate(coords, start=1):
             folium.CircleMarker(location=[lat, lon],
                                 radius=3,
@@ -92,7 +98,7 @@ if uploaded_file:
                 mime="application/vnd.google-earth.kml+xml"
             )
 
-        # === SIMPAN KML (Polygon) jika ada ===
+        # === SIMPAN KML (Polygon) ===
         if gdf_polygon is not None:
             kml_poly_filename = "koordinat_polygon.kml"
             gdf_polygon.to_file(kml_poly_filename, driver="KML")
