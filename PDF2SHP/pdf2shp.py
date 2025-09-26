@@ -1,7 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile, re
+import io, os, zipfile
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -12,30 +12,23 @@ st.title("PDF Koordinat → Shapefile & KML Converter")
 
 uploaded_file = st.file_uploader("Upload file PDF", type=["pdf"])
 
-def extract_coords_from_text(text):
-    numbers = re.findall(r"-?\d+\.\d+", text)
-    coords = []
-    for i in range(0, len(numbers) - 1, 2):
-        try:
-            lon, lat = float(numbers[i]), float(numbers[i + 1])
-            if 95 <= lon <= 141 and -11 <= lat <= 6:  # filter Indonesia
-                coords.append((lon, lat))
-        except:
-            continue
-    return coords
-
 if uploaded_file:
     coords = []
 
-    # --- ekstrak teks dengan pdfplumber ---
-    all_text = ""
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                all_text += text + "\n"
-
-    coords = extract_coords_from_text(all_text)
+            tables = page.extract_tables()
+            for table in tables:
+                for row in table:
+                    # contoh baris: ["1", "107.5792419085158", "-6.97468187015887"]
+                    if row and len(row) >= 3:
+                        try:
+                            lon = float(row[1])
+                            lat = float(row[2])
+                            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                coords.append((lon, lat))
+                        except:
+                            continue
 
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
@@ -94,4 +87,4 @@ if uploaded_file:
                 st.download_button("Download KML (Polygon)", f, "koordinat_polygon.kml", mime="application/vnd.google-earth.kml+xml")
 
     else:
-        st.error("Tidak ada koordinat yang terbaca dari PDF (mungkin tabel berupa gambar).")
+        st.error("Tidak ada koordinat yang terbaca dari tabel PDF.")
