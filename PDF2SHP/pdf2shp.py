@@ -33,12 +33,14 @@ if uploaded_file:
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
 
+        # === Dataframe Titik ===
         gdf_points = gpd.GeoDataFrame(
             pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
             geometry=[Point(xy) for xy in coords],
             crs="EPSG:4326"
         )
 
+        # === Dataframe Polygon ===
         gdf_polygon = None
         if len(coords) > 2:
             if coords[0] != coords[-1]:
@@ -46,14 +48,17 @@ if uploaded_file:
             poly = Polygon(coords)
             gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
+        # =========================
         # === SIMPAN FILE OUTPUT ===
-        # Shapefile (ZIP)
-        shp_folder = "output_shp"
+        # =========================
+
+        # Shapefile Titik (ZIP)
+        shp_folder = "output_shp_points"
         os.makedirs(shp_folder, exist_ok=True)
-        shp_path = os.path.join(shp_folder, "koordinat.shp")
+        shp_path = os.path.join(shp_folder, "koordinat_titik.shp")
         gdf_points.to_file(shp_path)
 
-        zip_filename = "shapefile_output.zip"
+        zip_filename = "shapefile_points.zip"
         with zipfile.ZipFile(zip_filename, 'w') as z:
             for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
                 fpath = shp_path.replace(".shp", ext)
@@ -61,13 +66,30 @@ if uploaded_file:
                     z.write(fpath, os.path.basename(fpath))
 
         with open(zip_filename, "rb") as f:
-            st.download_button("⬇️ Download Shapefile (ZIP)", f, "koordinat_shp.zip", mime="application/zip")
+            st.download_button("⬇️ Download Shapefile (Titik)", f, "koordinat_titik.zip", mime="application/zip")
+
+        # Shapefile Polygon (ZIP)
+        if gdf_polygon is not None:
+            shp_poly_folder = "output_shp_polygon"
+            os.makedirs(shp_poly_folder, exist_ok=True)
+            shp_poly_path = os.path.join(shp_poly_folder, "koordinat_polygon.shp")
+            gdf_polygon.to_file(shp_poly_path)
+
+            zip_poly_filename = "shapefile_polygon.zip"
+            with zipfile.ZipFile(zip_poly_filename, 'w') as z:
+                for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+                    fpath = shp_poly_path.replace(".shp", ext)
+                    if os.path.exists(fpath):
+                        z.write(fpath, os.path.basename(fpath))
+
+            with open(zip_poly_filename, "rb") as f:
+                st.download_button("⬇️ Download Shapefile (Polygon)", f, "koordinat_polygon.zip", mime="application/zip")
 
         # KML Titik
-        kml_filename = "koordinat.kml"
+        kml_filename = "koordinat_titik.kml"
         gdf_points.to_file(kml_filename, driver="KML")
         with open(kml_filename, "rb") as f:
-            st.download_button("⬇️ Download KML (Titik)", f, "koordinat.kml", mime="application/vnd.google-earth.kml+xml")
+            st.download_button("⬇️ Download KML (Titik)", f, "koordinat_titik.kml", mime="application/vnd.google-earth.kml+xml")
 
         # KML Polygon
         if gdf_polygon is not None:
@@ -79,13 +101,18 @@ if uploaded_file:
         # === PREVIEW PETA ===
         st.subheader("Preview Peta")
         m = folium.Map(location=[coords[0][1], coords[0][0]], zoom_start=17)
+
+        # Tambahkan polyline
         folium.PolyLine([(lat, lon) for lon, lat in coords],
                         color="blue", weight=2.5).add_to(m)
+
+        # Tambahkan titik
         for i, (lon, lat) in enumerate(coords, start=1):
             folium.CircleMarker(location=[lat, lon],
                                 radius=3,
                                 popup=f"Point {i}",
                                 color="red").add_to(m)
+
         st_folium(m, width=900, height=600)
 
     else:
