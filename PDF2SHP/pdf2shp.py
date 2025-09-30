@@ -51,12 +51,10 @@ def parse_luas(line):
         return None
 
 # ======================
-# === Upload Files ===
+# === Upload Files & Variabel Inisialisasi ===
 # ======================
-# Tetap di atas: Upload PKKPR
 uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-# --- Variabel inisialisasi ---
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
@@ -112,7 +110,7 @@ if uploaded_pkkpr:
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        # PESAN SUKSES EKSTRAKSI PKKPR (DIPINDAH KE SINI)
+        # PESAN SUKSES EKSTRAKSI PKKPR (Posisi di atas Upload Tapak Proyek)
         luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
         st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
@@ -126,21 +124,26 @@ if uploaded_pkkpr:
             gdf_polygon.set_crs(epsg=4326, inplace=True)
         st.success("✅ PKKPR dari Shapefile berhasil dibaca.")
     
-    # === Ekspor SHP PKKPR (DIPINDAH KE SINI, DI BAWAH PESAN SUKSES) ===
+    # === Ekspor SHP PKKPR (Di bawah pesan sukses PKKPR) ===
     if gdf_polygon is not None:
         st.subheader("⬇️ Download Hasil Konversi PKKPR")
         zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
         with open(zip_pkkpr_only, "rb") as f:
             st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
-        # st.markdown("---") # Garis pemisah dihapus untuk flow yang lebih halus, namun bisa ditambahkan kembali jika diinginkan
 
 
-# ======================
-# === Upload Tapak Proyek ===
-# ======================
-# Tetap di bawah: Upload Shapefile Tapak Proyek
-uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+# ===============================================
+# === Upload Tapak Proyek (Revisi Tata Letak) ===
+# ===============================================
 
+# Menggunakan kolom: 70% untuk file_uploader, 30% untuk pesan status
+col1, col2 = st.columns([0.7, 0.3])
+
+with col1:
+    # Uploader ditempatkan di kolom pertama
+    uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+
+# Variabel gdf_tapak diinisialisasi di luar 'if' atau dibaca di dalam 'if'
 if uploaded_tapak:
     if os.path.exists("tapak_shp"):
         shutil.rmtree("tapak_shp")
@@ -149,7 +152,16 @@ if uploaded_tapak:
     gdf_tapak = gpd.read_file("tapak_shp")
     if gdf_tapak.crs is None:
         gdf_tapak.set_crs(epsg=4326, inplace=True)
-    st.success("✅ Shapefile Tapak Proyek berhasil dibaca.")
+    
+    # PESAN SUKSES DIPINDAH KE KOLOM KEDUA
+    with col2:
+        # st.success dihapus, diganti dengan st.markdown untuk tampilan yang lebih sederhana
+        st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ Shapefile Tapak Proyek berhasil dibaca.</p>", unsafe_allow_html=True)
+        # st.markdown harus disesuaikan padding-topnya agar sejajar dengan file_uploader
+else:
+    # Pastikan gdf_tapak tetap None jika file belum di-upload
+    gdf_tapak = None
+
 
 # ======================
 # === Analisis Luas + Ekspor SHP (Hanya jika KEDUA file ada) ===
