@@ -59,7 +59,7 @@ uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", ty
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
-        
+    
 # ======================
 # === Ekstrak PKKPR ===
 # ======================
@@ -111,8 +111,9 @@ if uploaded_pkkpr:
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-       luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
-      st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
+        # INDENTASI SUDAH DIPERBAIKI DI SINI
+        luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
+        st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -130,7 +131,10 @@ if uploaded_pkkpr:
         zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
         with open(zip_pkkpr_only, "rb") as f:
             st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
+        # st.markdown("---") # Garis pemisah dihapus untuk flow yang lebih halus, namun bisa ditambahkan kembali jika diinginkan
 
+
+# ======================
 # === Upload Tapak Proyek ===
 # ======================
 if uploaded_tapak:
@@ -171,9 +175,19 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     st.markdown("---")
     
-    # ======================
+    # === Ekspor SHP Tapak Proyek (UTM) ===
+    st.subheader("⬇️ Download Shapefile Tapak Proyek (UTM)")
+    
+    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
+    with open(zip_tapak, "rb") as f:
+        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
+        
+    st.markdown("---")
+
+
+    # =======================================================
     # === Preview Interaktif Folium (DIPINDAH KE ATAS) ===
-    # ======================
+    # =======================================================
     st.subheader("🌍 Preview Peta Interaktif")
     
     # Tambahkan pilihan tiles/basemap
@@ -217,9 +231,9 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.markdown("---")
 
 
-    # ======================
+    # =======================================================
     # === Layout Peta PNG (DIPINDAH KE BAWAH) ===
-    # ======================
+    # =======================================================
     st.subheader("🖼️ Layout Peta (PNG)")
     
     # --- Tombol Download Layout PNG DIPINDAH DI ATAS PLT ---
@@ -249,7 +263,3 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     # Menampilkan peta
     st.pyplot(fig)
-
-
-
-
