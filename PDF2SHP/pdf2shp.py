@@ -49,14 +49,15 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas(line):
-    """Ambil angka luas dari teks PDF (format ribuan Indonesia/Eropa)"""
-    # Cari angka utama sebelum satuan m2/m²/ha
-    match = re.search(r"([\d\.\,]+)\s*(?:m2|m²|ha)?", line.lower())
+    """Ambil angka luas dari teks PDF (format Indonesia: titik ribuan, koma desimal)."""
+    match = re.search(r"([\d\.\,]+)", line)
     if not match:
         return None
     num_str = match.group(1)
-    # Format: titik = ribuan, koma = desimal
-    num_str = num_str.replace(".", "").replace(",", ".")
+    if "." in num_str and "," in num_str:  # contoh: 149.525,32
+        num_str = num_str.replace(".", "").replace(",", ".")
+    elif "," in num_str:  # contoh: 162,5
+        num_str = num_str.replace(",", ".")
     try:
         return float(num_str)
     except:
@@ -72,19 +73,20 @@ with col1:
 
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
-luas_disetujui, luas_dimohon = None, None
+luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     # Jika PDF
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords = []
+        luas_disetujui, luas_dimohon = None, None
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
                     for line in text.split("\n"):
-                        low = line.lower().strip()
+                        low = line.lower()
                         if "luas tanah yang disetujui" in low and luas_disetujui is None:
                             luas_disetujui = parse_luas(line)
                         elif "luas tanah yang dimohon" in low and luas_dimohon is None:
@@ -102,6 +104,14 @@ if uploaded_pkkpr:
                                     coords.append((lon, lat))
                             except:
                                 continue
+
+        # Pilih luas
+        if luas_disetujui is not None:
+            luas_pkkpr_doc = luas_disetujui
+            luas_pkkpr_doc_label = "disetujui"
+        elif luas_dimohon is not None:
+            luas_pkkpr_doc = luas_dimohon
+            luas_pkkpr_doc_label = "dimohon"
 
         # Buat geodataframe dari koordinat
         if coords:
@@ -188,15 +198,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
 
-    # Tampilkan kedua luas dokumen
-    if luas_disetujui and luas_dimohon:
-        luas_doc_str = f"{luas_disetujui:,.2f} m² (disetujui) | {luas_dimohon:,.2f} m² (dimohon)"
-    elif luas_disetujui:
-        luas_doc_str = f"{luas_disetujui:,.2f} m² (disetujui)"
-    elif luas_dimohon:
-        luas_doc_str = f"{luas_dimohon:,.2f} m² (dimohon)"
-    else:
-        luas_doc_str = "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
@@ -223,25 +225,21 @@ if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
 
-    # Tambahkan pilihan basemap lain
     folium.TileLayer(xyz["OpenStreetMap"]["Mapnik"], name="OpenStreetMap").add_to(m)
     folium.TileLayer(xyz["Esri"]["WorldImagery"], name="Esri World Imagery").add_to(m)
 
-    # Layer PKKPR
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
         name="PKKPR",
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
-    # Layer Tapak Proyek
     folium.GeoJson(
         gdf_tapak.to_crs(epsg=4326),
         name="Tapak Proyek",
         style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
     ).add_to(m)
 
-    # Titik koordinat
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
