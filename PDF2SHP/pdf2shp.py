@@ -179,12 +179,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     # ======================
     # === Layout Peta PNG ===
     # ======================
-
-        st.pyplot(fig)
-    out_png = "layout_peta.png"
-    plt.savefig(out_png, dpi=300, bbox_inches="tight")
-    with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
         
     st.subheader("🖼️ Layout Peta (PNG)")
     fig, ax = plt.subplots(figsize=(10, 10))
@@ -256,4 +250,5 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
+
 
