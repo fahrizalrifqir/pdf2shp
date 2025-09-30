@@ -203,7 +203,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
-    - Luas PKKPR (dokumen): {luas_doc_str}
+    - Luas PKKPR (dokumen) (masih salah jangan dipake): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
     - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
@@ -285,3 +285,4 @@ if gdf_polygon is not None and gdf_tapak is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
