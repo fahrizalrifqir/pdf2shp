@@ -51,17 +51,17 @@ def parse_luas(line):
         return None
 
 # ======================
-# === Upload Files & Variabel Inisialisasi ===
+# === Upload PKKPR ===
 # ======================
-uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
+col1, col2 = st.columns([0.7, 0.3])
+
+with col1:
+    uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
-    
-# ======================
-# === Ekstrak PKKPR ===
-# ======================
+
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords = []
@@ -110,9 +110,12 @@ if uploaded_pkkpr:
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        # PESAN SUKSES EKSTRAKSI PKKPR (Posisi di atas Upload Tapak Proyek)
-        luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
-        st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
+        # ✅ hanya simbol ceklis + jumlah titik
+        with col2:
+            st.markdown(
+                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik</p>",
+                unsafe_allow_html=True
+            )
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -122,28 +125,29 @@ if uploaded_pkkpr:
         gdf_polygon = gpd.read_file("pkkpr_shp")
         if gdf_polygon.crs is None:
             gdf_polygon.set_crs(epsg=4326, inplace=True)
-        st.success("✅ PKKPR dari Shapefile berhasil dibaca.")
-    
-    # === Ekspor SHP PKKPR (Di bawah pesan sukses PKKPR) ===
+
+        # ✅ hanya simbol ceklis
+        with col2:
+            st.markdown(
+                "<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>",
+                unsafe_allow_html=True
+            )
+
+    # === Ekspor SHP PKKPR ===
     if gdf_polygon is not None:
         st.subheader("⬇️ Download Hasil Konversi PKKPR")
         zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
         with open(zip_pkkpr_only, "rb") as f:
             st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
-
 # ===============================================
-# === Upload Tapak Proyek (Revisi Tata Letak) ===
+# === Upload Tapak Proyek ===
 # ===============================================
-
-# Menggunakan kolom: 70% untuk file_uploader, 30% untuk pesan status
 col1, col2 = st.columns([0.7, 0.3])
 
 with col1:
-    # Uploader ditempatkan di kolom pertama
     uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
-# Variabel gdf_tapak diinisialisasi di luar 'if' atau dibaca di dalam 'if'
 if uploaded_tapak:
     try:
         if os.path.exists("tapak_shp"):
@@ -153,26 +157,20 @@ if uploaded_tapak:
         gdf_tapak = gpd.read_file("tapak_shp")
         if gdf_tapak.crs is None:
             gdf_tapak.set_crs(epsg=4326, inplace=True)
-        
-        # PESAN SUKSES DI KOLOM KEDUA: HANYA TANDA CEKLIS (✅)
+
         with col2:
             st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
-            
+
     except Exception as e:
-        # Jika terjadi error saat membaca (gagal dibaca)
         gdf_tapak = None
         with col2:
-            # Contoh pesan jika gagal dibaca
             st.markdown(f"<p style='color: red; font-weight: bold; padding-top: 3.5rem;'>❌ Gagal dibaca</p>", unsafe_allow_html=True)
             st.error(f"Error: {e}")
-
 else:
-    # Pastikan gdf_tapak tetap None jika file belum di-upload
     gdf_tapak = None
 
-
 # ======================
-# === Analisis Luas + Ekspor SHP (Hanya jika KEDUA file ada) ===
+# === Analisis Overlay ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Hasil Analisis Overlay")
@@ -196,21 +194,15 @@ if gdf_polygon is not None and gdf_tapak is not None:
     - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
     - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
-    
+
     st.markdown("---")
 
-    # =======================================================
-    # === Preview Interaktif Folium ===
-    # =======================================================
+    # ======================
+    # === Preview Interaktif Folium
+    # ======================
     st.subheader("🌍 Preview Peta Interaktif")
-    
-    # Tambahkan pilihan tiles/basemap
-    tile_choice = st.selectbox(
-        "Pilih Basemap:",
-        ["OpenStreetMap", "Esri World Imagery", "Stamen Terrain"]
-    )
-    
-    # Mapping pilihan ke Folium provider string
+    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery", "Stamen Terrain"])
+
     if tile_choice == "Esri World Imagery":
         tile_provider = 'Esri.WorldImagery'
     elif tile_choice == "Stamen Terrain":
@@ -219,14 +211,11 @@ if gdf_polygon is not None and gdf_tapak is not None:
         tile_provider = 'OpenStreetMap'
 
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    
-    # Gunakan pilihan tile_provider
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
-    
-    # Tambahkan layer control agar pengguna bisa mengganti tiles secara interaktif
-    folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='OpenStreetMap contributors').add_to(m)
-    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery', attr='Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, swisstopo, and the GIS User Community').add_to(m)
-    folium.TileLayer('Stamen Terrain', name='Stamen Terrain', attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.').add_to(m)
+
+    folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m)
+    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery').add_to(m)
+    folium.TileLayer('Stamen Terrain', name='Stamen Terrain').add_to(m)
 
     folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
     folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
@@ -244,15 +233,12 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     st.markdown("---")
 
-
-    # =======================================================
-    # === Layout Peta PNG ===
-    # =======================================================
+    # ======================
+    # === Layout Peta PNG
+    # ======================
     st.subheader("🖼️ Layout Peta (PNG)")
-    
-    # --- Tombol Download Layout PNG DIPINDAH DI ATAS PLT ---
     out_png = "layout_peta.png"
-    # Membuat file PNG agar bisa didownload sebelum ditampilkan
+
     fig, ax = plt.subplots(figsize=(10, 10))
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
     gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
@@ -271,9 +257,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     ax.set_axis_off()
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
 
-    # Tombol download diletakkan di sini (sebelum st.pyplot)
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
-    
-    # Menampilkan peta
+
     st.pyplot(fig)
