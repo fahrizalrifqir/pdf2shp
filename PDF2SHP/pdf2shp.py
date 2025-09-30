@@ -174,16 +174,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     st.markdown("---")
     
-    # === Ekspor SHP Tapak Proyek (UTM) ===
-    st.subheader("⬇️ Download Shapefile Tapak Proyek (UTM)")
-    
-    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
-    with open(zip_tapak, "rb") as f:
-        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
-        
-    st.markdown("---")
-
-
     # ======================
     # === Preview Interaktif Folium (DIPINDAH KE ATAS) ===
     # ======================
@@ -262,3 +252,4 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     # Menampilkan peta
     st.pyplot(fig)
+
