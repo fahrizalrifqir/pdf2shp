@@ -53,9 +53,10 @@ def parse_luas(line):
 # ======================
 # === Upload Files ===
 # ======================
+# Tetap di atas: Upload PKKPR
 uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
-uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
+# --- Variabel inisialisasi ---
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
@@ -111,7 +112,7 @@ if uploaded_pkkpr:
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        # INDENTASI SUDAH DIPERBAIKI DI SINI
+        # PESAN SUKSES EKSTRAKSI PKKPR (DIPINDAH KE SINI)
         luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
         st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
@@ -125,7 +126,7 @@ if uploaded_pkkpr:
             gdf_polygon.set_crs(epsg=4326, inplace=True)
         st.success("✅ PKKPR dari Shapefile berhasil dibaca.")
     
-    # === Ekspor SHP PKKPR (Dipindahkan ke sini) ===
+    # === Ekspor SHP PKKPR (DIPINDAH KE SINI, DI BAWAH PESAN SUKSES) ===
     if gdf_polygon is not None:
         st.subheader("⬇️ Download Hasil Konversi PKKPR")
         zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
@@ -137,6 +138,9 @@ if uploaded_pkkpr:
 # ======================
 # === Upload Tapak Proyek ===
 # ======================
+# Tetap di bawah: Upload Shapefile Tapak Proyek
+uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+
 if uploaded_tapak:
     if os.path.exists("tapak_shp"):
         shutil.rmtree("tapak_shp")
@@ -176,7 +180,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.markdown("---")
 
     # =======================================================
-    # === Preview Interaktif Folium (DIPINDAH KE ATAS) ===
+    # === Preview Interaktif Folium ===
     # =======================================================
     st.subheader("🌍 Preview Peta Interaktif")
     
@@ -222,7 +226,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
 
     # =======================================================
-    # === Layout Peta PNG (DIPINDAH KE BAWAH) ===
+    # === Layout Peta PNG ===
     # =======================================================
     st.subheader("🖼️ Layout Peta (PNG)")
     
@@ -253,4 +257,3 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     # Menampilkan peta
     st.pyplot(fig)
-
