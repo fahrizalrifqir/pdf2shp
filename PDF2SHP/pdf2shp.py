@@ -6,21 +6,31 @@ from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
+import matplotlib.pyplot as plt
+import contextily as ctx
 
-st.set_page_config(page_title="PDF Koordinat → SHP/KML", layout="wide")
-st.title("PDF Koordinat → Shapefile & KML Converter")
+st.set_page_config(page_title="PDF Koordinat → SHP + Overlay", layout="wide")
+st.title("PDF Koordinat → Shapefile Converter & Overlay Tapak Proyek")
 
-uploaded_file = st.file_uploader("Upload file PDF", type=["pdf"])
+# ======================
+# === Upload PDF ===
+# ======================
+uploaded_file = st.file_uploader("Upload file PDF PKKPR", type=["pdf"])
+uploaded_shp = st.file_uploader("Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
+coords = []
+gdf_polygon = None
+gdf_tapak = None
+
+# ======================
+# === Ekstrak Koordinat dari PDF ===
+# ======================
 if uploaded_file:
-    coords = []
-
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
                 for row in table:
-                    # contoh baris: ["1", "107.5792419085158", "-6.97468187015887"]
                     if row and len(row) >= 3:
                         try:
                             lon = float(row[1])
@@ -33,87 +43,76 @@ if uploaded_file:
     if coords:
         st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
 
-        # === Dataframe Titik ===
         gdf_points = gpd.GeoDataFrame(
             pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
             geometry=[Point(xy) for xy in coords],
             crs="EPSG:4326"
         )
 
-        # === Dataframe Polygon ===
-        gdf_polygon = None
         if len(coords) > 2:
             if coords[0] != coords[-1]:
-                coords.append(coords[0])  # tutup polygon
+                coords.append(coords[0])
             poly = Polygon(coords)
             gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        # =========================
-        # === SIMPAN FILE OUTPUT ===
-        # =========================
-
-        # Shapefile Titik (ZIP)
-        shp_folder = "output_shp_points"
+        # Simpan Shapefile hasil ekstraksi
+        shp_folder = "output_shp_pdf"
         os.makedirs(shp_folder, exist_ok=True)
-        shp_path = os.path.join(shp_folder, "koordinat_titik.shp")
-        gdf_points.to_file(shp_path)
-
-        zip_filename = "shapefile_points.zip"
-        with zipfile.ZipFile(zip_filename, 'w') as z:
-            for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
-                fpath = shp_path.replace(".shp", ext)
-                if os.path.exists(fpath):
-                    z.write(fpath, os.path.basename(fpath))
-
-        with open(zip_filename, "rb") as f:
-            st.download_button("⬇️ Download Shapefile (Titik)", f, "koordinat_titik.zip", mime="application/zip")
-
-        # Shapefile Polygon (ZIP)
+        shp_path = os.path.join(shp_folder, "PKKPR_polygon.shp")
         if gdf_polygon is not None:
-            shp_poly_folder = "output_shp_polygon"
-            os.makedirs(shp_poly_folder, exist_ok=True)
-            shp_poly_path = os.path.join(shp_poly_folder, "koordinat_polygon.shp")
-            gdf_polygon.to_file(shp_poly_path)
+            gdf_polygon.to_file(shp_path)
 
-            zip_poly_filename = "shapefile_polygon.zip"
-            with zipfile.ZipFile(zip_poly_filename, 'w') as z:
+            zip_filename = "PKKPR_polygon.zip"
+            with zipfile.ZipFile(zip_filename, 'w') as z:
                 for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
-                    fpath = shp_poly_path.replace(".shp", ext)
+                    fpath = shp_path.replace(".shp", ext)
                     if os.path.exists(fpath):
                         z.write(fpath, os.path.basename(fpath))
 
-            with open(zip_poly_filename, "rb") as f:
-                st.download_button("⬇️ Download Shapefile (Polygon)", f, "koordinat_polygon.zip", mime="application/zip")
+            with open(zip_filename, "rb") as f:
+                st.download_button("⬇️ Download Shapefile (PKKPR Polygon)", f, "PKKPR_polygon.zip", mime="application/zip")
 
-        # KML Titik
-        kml_filename = "koordinat_titik.kml"
-        gdf_points.to_file(kml_filename, driver="KML")
-        with open(kml_filename, "rb") as f:
-            st.download_button("⬇️ Download KML (Titik)", f, "koordinat_titik.kml", mime="application/vnd.google-earth.kml+xml")
+# ======================
+# === Upload & Overlay Tapak Proyek ===
+# ======================
+if uploaded_shp:
+    with zipfile.ZipFile(uploaded_shp, "r") as z:
+        z.extractall("tapak_shp")
+    gdf_tapak = gpd.read_file("tapak_shp")
 
-        # KML Polygon
-        if gdf_polygon is not None:
-            kml_poly_filename = "koordinat_polygon.kml"
-            gdf_polygon.to_file(kml_poly_filename, driver="KML")
-            with open(kml_poly_filename, "rb") as f:
-                st.download_button("⬇️ Download KML (Polygon)", f, "koordinat_polygon.kml", mime="application/vnd.google-earth.kml+xml")
+    st.success("Shapefile Tapak Proyek berhasil dibaca.")
 
-        # === PREVIEW PETA ===
-        st.subheader("Preview Peta")
-        m = folium.Map(location=[coords[0][1], coords[0][0]], zoom_start=17)
+    if gdf_polygon is not None:
+        # pastikan CRS sama
+        gdf_tapak = gdf_tapak.to_crs(gdf_polygon.crs)
 
-        # Tambahkan polyline
-        folium.PolyLine([(lat, lon) for lon, lat in coords],
-                        color="blue", weight=2.5).add_to(m)
+        luas_tapak = gdf_tapak.area.sum()
+        luas_overlap = gdf_tapak.overlay(gdf_polygon, how="intersection").area.sum()
+        luas_outside = luas_tapak - luas_overlap
 
-        # Tambahkan titik
-        for i, (lon, lat) in enumerate(coords, start=1):
-            folium.CircleMarker(location=[lat, lon],
-                                radius=3,
-                                popup=f"Point {i}",
-                                color="red").add_to(m)
+        st.info(f"""
+        **Analisis Luas Tapak Proyek:**
+        - Total Luas Tapak Proyek: {luas_tapak:.2f} m²
+        - Luas di dalam PKKPR: {luas_overlap:.2f} m²
+        - Luas di luar PKKPR: {luas_outside:.2f} m²
+        """)
 
-        st_folium(m, width=900, height=600)
+        # ======================
+        # === Layout Peta PNG ===
+        # ======================
+        fig, ax = plt.subplots(figsize=(10, 10))
 
-    else:
-        st.error("Tidak ada koordinat yang terbaca dari tabel PDF.")
+        gdf_polygon.to_crs(epsg=3857).plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
+        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
+
+        ctx.add_basemap(ax, crs=gdf_polygon.crs.to_string(), source=ctx.providers.Esri.WorldImagery)
+
+        ax.legend()
+        ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
+
+        out_png = "layout_peta.png"
+        plt.savefig(out_png, dpi=300, bbox_inches="tight")
+
+        with open(out_png, "rb") as f:
+            st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+
