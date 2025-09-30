@@ -11,19 +11,18 @@ import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
-st.set_page_config(page_title="PDF/Shapefile PKKPR → SHP + Overlay", layout="wide")
-st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
+st.set_page_config(page_title="PKKPR → SHP + Overlay", layout="wide")
+st.title("📍 PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
 # === Fungsi Helper ===
 # ======================
-def get_utm_epsg(lon, lat):
+def get_utm_zone(lon, lat):
     """Deteksi zona UTM dari koordinat lon/lat"""
     zone = int((lon + 180) / 6) + 1
-    if lat >= 0:
-        return 32600 + zone  # UTM utara
-    else:
-        return 32700 + zone  # UTM selatan
+    hemi = "N" if lat >= 0 else "S"
+    epsg = 32600 + zone if hemi == "N" else 32700 + zone
+    return zone, hemi, epsg
 
 # ======================
 # === Upload Files ===
@@ -91,7 +90,7 @@ if uploaded_tapak:
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    utm_epsg = get_utm_epsg(centroid.x, centroid.y)
+    zone, hemi, utm_epsg = get_utm_zone(centroid.x, centroid.y)
 
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
@@ -101,7 +100,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_outside = luas_tapak - luas_overlap
 
     st.info(f"""
-    **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
+    **Analisis Luas Tapak Proyek (Zona UTM {zone} {hemi}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas di dalam PKKPR: {luas_overlap:,.2f} m²
     - Luas di luar PKKPR: {luas_outside:,.2f} m²
@@ -128,7 +127,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
                       linestyle="None", markersize=8, label="PKKPR (Titik)")
     ]
     ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
+    ax.set_title(f"Peta Kesesuaian Tapak Proyek dengan PKKPR\nZona UTM: {zone} {hemi}", fontsize=14)
 
     out_png = "layout_peta.png"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
