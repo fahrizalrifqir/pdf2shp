@@ -1,7 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile
+import io, os, zipfile, shutil
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -11,18 +11,32 @@ import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
-st.set_page_config(page_title="PKKPR → SHP + Overlay", layout="wide")
-st.title("📍 PKKPR → Shapefile Converter & Overlay Tapak Proyek")
+st.set_page_config(page_title="PDF/Shapefile PKKPR → SHP + Overlay", layout="wide")
+st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
 # === Fungsi Helper ===
 # ======================
-def get_utm_zone(lon, lat):
+def get_utm_epsg(lon, lat):
     """Deteksi zona UTM dari koordinat lon/lat"""
     zone = int((lon + 180) / 6) + 1
-    hemi = "N" if lat >= 0 else "S"
-    epsg = 32600 + zone if hemi == "N" else 32700 + zone
-    return zone, hemi, epsg
+    if lat >= 0:
+        return 32600 + zone  # UTM utara
+    else:
+        return 32700 + zone  # UTM selatan
+
+def save_shapefile(gdf, folder_name, zip_name):
+    """Simpan GeoDataFrame ke shapefile .zip"""
+    if os.path.exists(folder_name):
+        shutil.rmtree(folder_name)
+    os.makedirs(folder_name, exist_ok=True)
+    shp_path = os.path.join(folder_name, "data.shp")
+    gdf.to_file(shp_path)
+    zip_path = f"{zip_name}.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for file in os.listdir(folder_name):
+            zf.write(os.path.join(folder_name, file), arcname=file)
+    return zip_path
 
 # ======================
 # === Upload Files ===
@@ -86,11 +100,11 @@ if uploaded_tapak:
     st.success("✅ Shapefile Tapak Proyek berhasil dibaca.")
 
 # ======================
-# === Analisis Luas ===
+# === Analisis Luas + Ekspor SHP ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    zone, hemi, utm_epsg = get_utm_zone(centroid.x, centroid.y)
+    utm_epsg = get_utm_epsg(centroid.x, centroid.y)
 
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
@@ -100,11 +114,22 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_outside = luas_tapak - luas_overlap
 
     st.info(f"""
-    **Analisis Luas Tapak Proyek (Zona UTM {zone} {hemi}):**
+    **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas di dalam PKKPR: {luas_overlap:,.2f} m²
     - Luas di luar PKKPR: {luas_outside:,.2f} m²
     """)
+
+    # === Ekspor SHP hasil ===
+    if gdf_polygon is not None:
+        zip_pkkpr = save_shapefile(gdf_polygon, "out_pkkpr", "PKKPR_Hasil")
+        with open(zip_pkkpr, "rb") as f:
+            st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil.zip", mime="application/zip")
+
+    if gdf_tapak is not None:
+        zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
+        with open(zip_tapak, "rb") as f:
+            st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
 
     # ======================
     # === Layout Peta PNG ===
@@ -127,7 +152,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
                       linestyle="None", markersize=8, label="PKKPR (Titik)")
     ]
     ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
-    ax.set_title(f"Peta Kesesuaian Tapak Proyek dengan PKKPR\nZona UTM: {zone} {hemi}", fontsize=14)
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
 
     out_png = "layout_peta.png"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
