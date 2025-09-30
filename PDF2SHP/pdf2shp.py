@@ -25,17 +25,6 @@ def get_utm_epsg(lon, lat):
     else:
         return 32700 + zone  # UTM selatan
 
-def epsg_to_utm_label(epsg_code: int) -> str:
-    """Konversi EPSG UTM ke format UTM Zone (mis. 32748 -> UTM 48S)"""
-    if 32601 <= epsg_code <= 32660:  # utara
-        zone = epsg_code - 32600
-        return f"UTM {zone}N"
-    elif 32701 <= epsg_code <= 32760:  # selatan
-        zone = epsg_code - 32700
-        return f"UTM {zone}S"
-    else:
-        return f"EPSG:{epsg_code}"  # fallback
-
 def save_shapefile(gdf, folder_name, zip_name):
     """Simpan GeoDataFrame ke shapefile .zip"""
     if os.path.exists(folder_name):
@@ -187,8 +176,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg = get_utm_epsg(centroid.x, centroid.y)
-    utm_label = epsg_to_utm_label(utm_epsg)
-
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
 
@@ -199,7 +186,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
-    **Analisis Luas Tapak Proyek (Proyeksi {utm_label}):**
+    **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
@@ -273,3 +260,5 @@ if gdf_polygon is not None and gdf_tapak is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
+Analisis Luas Tapak Proyek (Proyeksi UTM 32748):
