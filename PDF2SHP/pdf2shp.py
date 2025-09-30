@@ -174,41 +174,18 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     st.markdown("---")
     
-   
-
-    # ======================
-    # === Layout Peta PNG ===
-    # ======================
-        
-    st.subheader("🖼️ Layout Peta (PNG)")
-    fig, ax = plt.subplots(figsize=(10, 10))
-    gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
-    gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
-    if gdf_points is not None:
-        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
-
-    # hilangkan tulisan attribution
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
-
-    legend_elements = [
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
-        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)")
-    ]
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
-    ax.set_axis_off()
-
-    st.pyplot(fig)
-    out_png = "layout_peta.png"
-    plt.savefig(out_png, dpi=300, bbox_inches="tight")
-    with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+    # === Ekspor SHP Tapak Proyek (UTM) ===
+    st.subheader("⬇️ Download Shapefile Tapak Proyek (UTM)")
+    
+    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
+    with open(zip_tapak, "rb") as f:
+        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
         
     st.markdown("---")
 
+
     # ======================
-    # === Preview Interaktif Folium ===
+    # === Preview Interaktif Folium (DIPINDAH KE ATAS) ===
     # ======================
     st.subheader("🌍 Preview Peta Interaktif")
     
@@ -232,7 +209,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
     
     # Tambahkan layer control agar pengguna bisa mengganti tiles secara interaktif
-    # PERBAIKAN: Menambahkan 'attr' (attribution) untuk Stamen Terrain
     folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='OpenStreetMap contributors').add_to(m)
     folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery', attr='Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, swisstopo, and the GIS User Community').add_to(m)
     folium.TileLayer('Stamen Terrain', name='Stamen Terrain', attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.').add_to(m)
@@ -251,4 +227,38 @@ if gdf_polygon is not None and gdf_tapak is not None:
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
 
+    st.markdown("---")
 
+
+    # ======================
+    # === Layout Peta PNG (DIPINDAH KE BAWAH) ===
+    # ======================
+    st.subheader("🖼️ Layout Peta (PNG)")
+    
+    # --- Tombol Download Layout PNG DIPINDAH DI ATAS PLT ---
+    out_png = "layout_peta.png"
+    # Membuat file PNG agar bisa didownload sebelum ditampilkan
+    fig, ax = plt.subplots(figsize=(10, 10))
+    gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+    if gdf_points is not None:
+        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
+
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+
+    legend_elements = [
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
+        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)")
+    ]
+    ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
+    ax.set_axis_off()
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+
+    # Tombol download diletakkan di sini (sebelum st.pyplot)
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+    
+    # Menampilkan peta
+    st.pyplot(fig)
