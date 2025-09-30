@@ -40,10 +40,12 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 def parse_luas(line):
     """Ambil angka luas dari teks PDF"""
+    # Gunakan regex untuk mencari angka desimal, termasuk yang menggunakan koma sebagai pemisah desimal
     match = re.search(r"([\d\.\,]+)", line)
     if not match:
         return None
     num_str = match.group(1)
+    # Hapus titik (ribuan) dan ganti koma dengan titik (desimal) jika ada, lalu coba konversi
     num_str = num_str.replace(".", "").replace(",", ".")
     try:
         return float(num_str)
@@ -64,11 +66,15 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 # === Ekstrak PKKPR ===
 # ======================
 if uploaded_pkkpr:
+    
+    # --- Proses PDF ---
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords = []
         luas_disetujui, luas_dimohon = None, None
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
+                
+                # Ekstraksi Luas
                 text = page.extract_text()
                 if text:
                     for line in text.split("\n"):
@@ -78,7 +84,7 @@ if uploaded_pkkpr:
                         elif "luas tanah yang dimohon" in low and luas_dimohon is None:
                             luas_dimohon = parse_luas(line)
 
-                # cari tabel koordinat
+                # Cari tabel koordinat
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -86,12 +92,13 @@ if uploaded_pkkpr:
                             try:
                                 lon = float(row[1])
                                 lat = float(row[2])
+                                # Filter sederhana untuk koordinat Indonesia
                                 if 95 <= lon <= 141 and -11 <= lat <= 6:
                                     coords.append((lon, lat))
                             except:
                                 continue
 
-        # pilih luas
+        # Pilih Luas
         if luas_disetujui is not None:
             luas_pkkpr_doc = luas_disetujui
             luas_pkkpr_doc_label = "disetujui"
@@ -100,6 +107,7 @@ if uploaded_pkkpr:
             luas_pkkpr_doc_label = "dimohon"
 
         if coords:
+            # Buat GeoDataFrame dari Titik (Points)
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in coords],
@@ -114,6 +122,7 @@ if uploaded_pkkpr:
         luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
         st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
+    # --- Proses Shapefile ZIP ---
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
             shutil.rmtree("pkkpr_shp")
@@ -123,6 +132,15 @@ if uploaded_pkkpr:
         if gdf_polygon.crs is None:
             gdf_polygon.set_crs(epsg=4326, inplace=True)
         st.success("✅ PKKPR dari Shapefile berhasil dibaca.")
+
+    # === Tombol Download PKKPR SHP (DIPINDAH DI SINI) ===
+    if gdf_polygon is not None:
+        st.subheader("⬇️ Konversi Shapefile PKKPR")
+        zip_pkkpr = save_shapefile(gdf_polygon, "out_pkkpr", "PKKPR_Hasil")
+        with open(zip_pkkpr, "rb") as f:
+            st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil.zip", mime="application/zip")
+        st.markdown("---")
+
 
 # ======================
 # === Upload Tapak Proyek ===
@@ -140,7 +158,11 @@ if uploaded_tapak:
 # ======================
 # === Analisis Luas + Ekspor SHP ===
 # ======================
+# Bagian ini hanya berjalan jika KEDUA file telah diunggah
 if gdf_polygon is not None and gdf_tapak is not None:
+    
+    st.subheader("📊 Hasil Analisis Tumpang Tindih (Overlay)")
+    
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg = get_utm_epsg(centroid.x, centroid.y)
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
@@ -154,25 +176,27 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
-    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+    - Total Luas Tapak Proyek: **{luas_tapak:,.2f} m²**
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-    - Luas di dalam PKKPR: {luas_overlap:,.2f} m²
-    - Luas di luar PKKPR: {luas_outside:,.2f} m²
+    - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
-
-    # === Ekspor SHP hasil ===
-    zip_pkkpr = save_shapefile(gdf_polygon, "out_pkkpr", "PKKPR_Hasil")
-    with open(zip_pkkpr, "rb") as f:
-        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil.zip", mime="application/zip")
-
+    
+    st.markdown("---")
+    
+    # === Ekspor SHP Tapak Proyek (UTM) ===
+    st.subheader("⬇️ Download Shapefile Hasil Reproyeksi")
     zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
     with open(zip_tapak, "rb") as f:
         st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
+        
+    st.markdown("---")
 
     # ======================
     # === Layout Peta PNG ===
     # ======================
+    st.subheader("🖼️ Layout Peta (PNG)")
     fig, ax = plt.subplots(figsize=(10, 10))
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
     gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
@@ -189,20 +213,24 @@ if gdf_polygon is not None and gdf_tapak is not None:
     ]
     ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
+    ax.set_axis_off()
 
+    st.pyplot(fig)
     out_png = "layout_peta.png"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+        
+    st.markdown("---")
 
     # ======================
     # === Preview Interaktif Folium ===
     # ======================
     st.subheader("🌍 Preview Peta Interaktif")
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
-    folium.GeoJson(gdf_polygon.to_crs(epsg=4326), style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
-    folium.GeoJson(gdf_tapak.to_crs(epsg=4326), style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles="cartodbdarkmatter")
+    folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
+    folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
 
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
@@ -212,4 +240,20 @@ if gdf_polygon is not None and gdf_tapak is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
+    folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
+    
+# ======================
+# === Bersihkan File Temporer (Optional) ===
+# ======================
+# Disarankan hanya untuk pengembangan lokal, di Streamlit Cloud mungkin tidak perlu.
+# try:
+#     if os.path.exists("pkkpr_shp"): shutil.rmtree("pkkpr_shp")
+#     if os.path.exists("tapak_shp"): shutil.rmtree("tapak_shp")
+#     if os.path.exists("out_pkkpr"): shutil.rmtree("out_pkkpr")
+#     if os.path.exists("out_tapak"): shutil.rmtree("out_tapak")
+#     if os.path.exists("PKKPR_Hasil.zip"): os.remove("PKKPR_Hasil.zip")
+#     if os.path.exists("Tapak_Hasil_UTM.zip"): os.remove("Tapak_Hasil_UTM.zip")
+#     if os.path.exists("layout_peta.png"): os.remove("layout_peta.png")
+# except Exception as e:
+#     pass
