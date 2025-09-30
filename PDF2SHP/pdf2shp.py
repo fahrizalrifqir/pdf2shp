@@ -1,7 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile, shutil, re
+import io, os, zipfile, shutil
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -30,26 +30,16 @@ def save_shapefile(gdf, folder_name, zip_name):
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name, exist_ok=True)
+
     shp_path = os.path.join(folder_name, "data.shp")
     gdf.to_file(shp_path)
+
     zip_path = f"{zip_name}.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
         for file in os.listdir(folder_name):
             zf.write(os.path.join(folder_name, file), arcname=file)
-    return zip_path
 
-def parse_luas(line):
-    """Ambil angka luas dari teks PDF"""
-    match = re.search(r"([\d\.\,]+)", line)
-    if not match:
-        return None
-    num_str = match.group(1)
-    # hilangkan spasi, ubah format ribuan ke float python
-    num_str = num_str.replace(".", "").replace(",", ".")
-    try:
-        return float(num_str)
-    except:
-        return None
+    return zip_path
 
 # ======================
 # === Upload Files ===
@@ -67,17 +57,24 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords = []
-        luas_disetujui, luas_dimohon = None, None
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
                     for line in text.split("\n"):
                         low = line.lower()
-                        if "luas tanah yang disetujui" in low and luas_disetujui is None:
-                            luas_disetujui = parse_luas(line)
-                        elif "luas tanah yang dimohon" in low and luas_dimohon is None:
-                            luas_dimohon = parse_luas(line)
+                        if "luas tanah yang disetujui" in low and luas_pkkpr_doc is None:
+                            try:
+                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
+                                luas_pkkpr_doc_label = "disetujui"
+                            except:
+                                pass
+                        elif "luas tanah yang dimohon" in low and luas_pkkpr_doc is None:
+                            try:
+                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
+                                luas_pkkpr_doc_label = "dimohon"
+                            except:
+                                pass
 
                 # cari tabel koordinat
                 tables = page.extract_tables()
@@ -91,14 +88,6 @@ if uploaded_pkkpr:
                                     coords.append((lon, lat))
                             except:
                                 continue
-
-        # pilih luas
-        if luas_disetujui is not None:
-            luas_pkkpr_doc = luas_disetujui
-            luas_pkkpr_doc_label = "disetujui"
-        elif luas_dimohon is not None:
-            luas_pkkpr_doc = luas_dimohon
-            luas_pkkpr_doc_label = "dimohon"
 
         if coords:
             gdf_points = gpd.GeoDataFrame(
@@ -144,6 +133,7 @@ if uploaded_tapak:
 if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg = get_utm_epsg(centroid.x, centroid.y)
+
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
 
@@ -174,22 +164,32 @@ if gdf_polygon is not None and gdf_tapak is not None:
     # === Layout Peta PNG ===
     # ======================
     fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Polygon PKKPR
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    # Tapak Proyek
     gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+    # Titik koordinat
     if gdf_points is not None:
         gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
+    # Basemap tanpa attribution
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+
+    # Legend dipindahkan ke bawah peta
     legend_elements = [
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)")
     ]
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
+    ax.legend(handles=legend_elements, loc="upper center", bbox_to_anchor=(0.5, -0.05),
+              fontsize=10, frameon=True, ncol=3)
+
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
 
     out_png = "layout_peta.png"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
+
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
@@ -199,8 +199,11 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
-    folium.GeoJson(gdf_polygon.to_crs(epsg=4326), style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
-    folium.GeoJson(gdf_tapak.to_crs(epsg=4326), style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+
+    folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
+    folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
 
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
