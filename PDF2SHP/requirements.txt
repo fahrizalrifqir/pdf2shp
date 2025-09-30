@@ -2,8 +2,10 @@ streamlit
 geopandas
 pandas
 shapely
+fiona
 folium
 streamlit-folium
 pdfplumber
 matplotlib
 contextily
+xyzservices
