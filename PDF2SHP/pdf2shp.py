@@ -261,4 +261,4 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     st.pyplot(fig)
 
-Analisis Luas Tapak Proyek (Proyeksi UTM 32748):
+
