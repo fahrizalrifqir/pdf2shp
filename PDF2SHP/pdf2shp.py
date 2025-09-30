@@ -238,9 +238,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
     
     # Tambahkan layer control agar pengguna bisa mengganti tiles secara interaktif
-    folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m)
-    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery', attr='Esri').add_to(m)
-    folium.TileLayer('Stamen Terrain', name='Stamen Terrain').add_to(m)
+    # PERBAIKAN: Menambahkan 'attr' (attribution) untuk Stamen Terrain
+    folium.TileLayer('OpenStreetMap', name='OpenStreetMap', attr='OpenStreetMap contributors').add_to(m)
+    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery', attr='Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, swisstopo, and the GIS User Community').add_to(m)
+    folium.TileLayer('Stamen Terrain', name='Stamen Terrain', attr='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.').add_to(m)
 
     folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
     folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
