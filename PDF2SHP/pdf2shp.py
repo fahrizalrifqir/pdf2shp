@@ -9,24 +9,26 @@ import pdfplumber
 import matplotlib.pyplot as plt
 import contextily as ctx
 
-st.set_page_config(page_title="PDF Koordinat → SHP + Overlay", layout="wide")
-st.title("PDF Koordinat → Shapefile Converter & Overlay Tapak Proyek")
+st.set_page_config(page_title="PDF/PKKPR SHP → SHP + Overlay", layout="wide")
+st.title("📌 PDF/PKKPR SHP → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
 # === Upload Files ===
 # ======================
-uploaded_file = st.file_uploader("📄 Upload file PDF PKKPR", type=["pdf"])
-uploaded_shp = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+uploaded_pdf = st.file_uploader("📄 Upload file PDF PKKPR (opsional)", type=["pdf"])
+uploaded_pkkpr_shp = st.file_uploader("📂 Upload Shapefile PKKPR (ZIP, opsional)", type=["zip"])
+uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
 coords = []
 gdf_polygon = None
+gdf_points = None
 gdf_tapak = None
 
 # ======================
-# === Ekstrak Koordinat dari PDF ===
+# === Ekstrak dari PDF (jika ada) ===
 # ======================
-if uploaded_file:
-    with pdfplumber.open(uploaded_file) as pdf:
+if uploaded_pdf:
+    with pdfplumber.open(uploaded_pdf) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
@@ -50,7 +52,7 @@ if uploaded_file:
             crs="EPSG:4326"
         )
 
-        # Buat GeoDataFrame Polygon
+        # Buat Polygon
         if len(coords) > 2:
             if coords[0] != coords[-1]:
                 coords.append(coords[0])  # Tutup polygon
@@ -60,79 +62,101 @@ if uploaded_file:
         # Simpan Shapefile hasil ekstraksi
         shp_folder = "output_shp_pdf"
         os.makedirs(shp_folder, exist_ok=True)
-        shp_path = os.path.join(shp_folder, "PKKPR_polygon.shp")
+
+        # Simpan titik
+        shp_path_points = os.path.join(shp_folder, "PKKPR_points.shp")
+        gdf_points.to_file(shp_path_points)
+
+        # Simpan polygon
         if gdf_polygon is not None:
-            gdf_polygon.to_file(shp_path)
+            shp_path_poly = os.path.join(shp_folder, "PKKPR_polygon.shp")
+            gdf_polygon.to_file(shp_path_poly)
 
-            zip_filename = "PKKPR_polygon.zip"
-            with zipfile.ZipFile(zip_filename, 'w') as z:
-                for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
-                    fpath = shp_path.replace(".shp", ext)
-                    if os.path.exists(fpath):
-                        z.write(fpath, os.path.basename(fpath))
+        # Zip semua file
+        zip_filename = "PKKPR_fromPDF.zip"
+        with zipfile.ZipFile(zip_filename, 'w') as z:
+            for file in os.listdir(shp_folder):
+                z.write(os.path.join(shp_folder, file), file)
 
-            with open(zip_filename, "rb") as f:
-                st.download_button("⬇️ Download Shapefile (PKKPR Polygon)", f, "PKKPR_polygon.zip", mime="application/zip")
+        with open(zip_filename, "rb") as f:
+            st.download_button("⬇️ Download Shapefile (Points + Polygon dari PDF)", f, "PKKPR_fromPDF.zip", mime="application/zip")
 
 # ======================
-# === Upload & Overlay Tapak Proyek ===
+# === Upload SHP PKKPR (jika ada) ===
 # ======================
-if uploaded_shp:
-    with zipfile.ZipFile(uploaded_shp, "r") as z:
+if uploaded_pkkpr_shp:
+    with zipfile.ZipFile(uploaded_pkkpr_shp, "r") as z:
+        z.extractall("pkkpr_shp")
+    gdf_polygon = gpd.read_file("pkkpr_shp")
+    st.success("✅ Shapefile PKKPR berhasil dibaca.")
+
+# ======================
+# === Upload SHP Tapak ===
+# ======================
+if uploaded_tapak:
+    with zipfile.ZipFile(uploaded_tapak, "r") as z:
         z.extractall("tapak_shp")
     gdf_tapak = gpd.read_file("tapak_shp")
-
     st.success("✅ Shapefile Tapak Proyek berhasil dibaca.")
 
-    if gdf_polygon is not None:
-        # Pastikan CRS sama (gunakan meter / EPSG:3857 untuk luas)
-        gdf_tapak = gdf_tapak.to_crs(epsg=3857)
-        gdf_polygon = gdf_polygon.to_crs(epsg=3857)
+# ======================
+# === Analisis & Peta ===
+# ======================
+if gdf_polygon is not None and gdf_tapak is not None:
+    # Pastikan CRS sama
+    gdf_tapak = gdf_tapak.to_crs(epsg=3857)
+    gdf_polygon = gdf_polygon.to_crs(epsg=3857)
 
-        luas_tapak = gdf_tapak.area.sum()
-        luas_overlap = gdf_tapak.overlay(gdf_polygon, how="intersection").area.sum()
-        luas_outside = luas_tapak - luas_overlap
+    luas_tapak = gdf_tapak.area.sum()
+    luas_overlap = gdf_tapak.overlay(gdf_polygon, how="intersection").area.sum()
+    luas_outside = luas_tapak - luas_overlap
 
-        st.info(f"""
-        **Analisis Luas Tapak Proyek:**
-        - Total Luas Tapak Proyek: {luas_tapak:.2f} m²
-        - Luas di dalam PKKPR: {luas_overlap:.2f} m²
-        - Luas di luar PKKPR: {luas_outside:.2f} m²
-        """)
+    st.info(f"""
+    **Analisis Luas Tapak Proyek:**
+    - Total Luas Tapak Proyek: {luas_tapak:.2f} m²
+    - Luas di dalam PKKPR: {luas_overlap:.2f} m²
+    - Luas di luar PKKPR: {luas_outside:.2f} m²
+    """)
 
-        # ======================
-        # === Layout Peta PNG ===
-        # ======================
-        fig, ax = plt.subplots(figsize=(10, 10))
+    # ======================
+    # === Layout Peta PNG ===
+    # ======================
+    fig, ax = plt.subplots(figsize=(10, 10))
 
-        gdf_polygon.plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
-        gdf_tapak.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
+    gdf_polygon.plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
+    gdf_tapak.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
 
-        # Tambahkan basemap
-        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
-        ax.legend()
-        ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
+    ax.legend(title="Legenda", loc="lower right")
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
 
-        out_png = "layout_peta.png"
-        plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    out_png = "layout_peta.png"
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
 
-        with open(out_png, "rb") as f:
-            st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
-        # ======================
-        # === Preview Folium ===
-        # ======================
-        st.subheader("🌍 Preview Peta Interaktif")
-        centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
+    # ======================
+    # === Preview Folium ===
+    # ======================
+    st.subheader("🌍 Preview Peta Interaktif")
+    centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
 
-        # PKKPR Polygon
-        folium.GeoJson(gdf_polygon.to_crs(epsg=4326), 
-                       style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+    # PKKPR Polygon
+    folium.GeoJson(
+        gdf_polygon.to_crs(epsg=4326),
+        name="PKKPR",
+        style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}
+    ).add_to(m)
 
-        # Tapak Proyek
-        folium.GeoJson(gdf_tapak.to_crs(epsg=4326), 
-                       style_function=lambda x: {"color": "yellow", "fillOpacity": 0}).add_to(m)
+    # Tapak Proyek
+    folium.GeoJson(
+        gdf_tapak.to_crs(epsg=4326),
+        name="Tapak Proyek",
+        style_function=lambda x: {"color": "yellow", "fillOpacity": 0}
+    ).add_to(m)
 
-        st_folium(m, width=900, height=600)
+    folium.LayerControl(collapsed=False).add_to(m)
+    st_folium(m, width=900, height=600)
