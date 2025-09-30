@@ -21,13 +21,16 @@ st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 # ======================
 # === Fungsi Helper ===
 # ======================
-def get_utm_epsg(lon, lat):
+def get_utm_info(lon, lat):
     """Deteksi zona UTM dari koordinat lon/lat"""
     zone = int((lon + 180) / 6) + 1
     if lat >= 0:
-        return 32600 + zone  # UTM utara
+        epsg = 32600 + zone  # UTM utara
+        zone_label = f"{zone}N"
     else:
-        return 32700 + zone  # UTM selatan
+        epsg = 32700 + zone  # UTM selatan
+        zone_label = f"{zone}S"
+    return epsg, zone_label
 
 def save_shapefile(gdf, folder_name, zip_name):
     """Simpan GeoDataFrame ke shapefile dan zip"""
@@ -50,7 +53,6 @@ def parse_luas(line):
     match = re.search(r"([\d\.\,]+)", line)
     if not match:
         return None
-
     num_str = match.group(1)
     num_str = num_str.replace(".", "").replace(",", ".")
     try:
@@ -183,7 +185,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     # Gunakan UTM sesuai centroid tapak
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    utm_epsg = get_utm_epsg(centroid.x, centroid.y)
+    utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
@@ -196,7 +198,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
-    **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
+    **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
