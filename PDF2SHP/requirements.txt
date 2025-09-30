@@ -2,12 +2,8 @@ streamlit
 geopandas
 pandas
 shapely
-pdfplumber
-PyMuPDF
 folium
 streamlit-folium
-fiona
-pyproj
-pdf2image
-pytesseract
-Pillow
+pdfplumber
+matplotlib
+contextily
