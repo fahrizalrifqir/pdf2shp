@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+import xyzservices.providers as xyz   # ✅ untuk basemap dengan attribution otomatis
 
 # ======================
 # === Konfigurasi App ===
@@ -210,21 +211,25 @@ if gdf_polygon is not None and gdf_tapak is not None:
     # ======================
     st.subheader("🌍 Preview Peta Interaktif")
 
-    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery", "Stamen Terrain"])
+    tile_choice = st.selectbox(
+        "Pilih Basemap:",
+        ["OpenStreetMap", "Esri World Imagery", "Stamen Terrain"]
+    )
+
     if tile_choice == "Esri World Imagery":
-        tile_provider = 'Esri.WorldImagery'
+        tile_provider = xyz.Esri.WorldImagery
     elif tile_choice == "Stamen Terrain":
-        tile_provider = 'Stamen Terrain'
+        tile_provider = xyz.Stamen.Terrain
     else:
-        tile_provider = 'OpenStreetMap'
+        tile_provider = xyz.OpenStreetMap.Mapnik
 
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
 
-    # Tambahkan beberapa pilihan basemap
-    folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m)
-    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery').add_to(m)
-    folium.TileLayer('Stamen Terrain', name='Stamen Terrain').add_to(m)
+    # Tambahkan pilihan basemap
+    folium.TileLayer(xyz.OpenStreetMap.Mapnik, name="OpenStreetMap").add_to(m)
+    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
+    folium.TileLayer(xyz.Stamen.Terrain, name="Stamen Terrain").add_to(m)
 
     # Layer PKKPR
     folium.GeoJson(
