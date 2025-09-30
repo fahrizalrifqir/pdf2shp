@@ -46,15 +46,34 @@ uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", ty
 
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
+luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 # ======================
 # === Ekstrak PKKPR ===
 # ======================
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        coords = []  # reset
+        coords = []
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    for line in text.split("\n"):
+                        low = line.lower()
+                        if "luas tanah yang disetujui" in low and luas_pkkpr_doc is None:
+                            try:
+                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
+                                luas_pkkpr_doc_label = "disetujui"
+                            except:
+                                pass
+                        elif "luas tanah yang dimohon" in low and luas_pkkpr_doc is None:
+                            try:
+                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
+                                luas_pkkpr_doc_label = "dimohon"
+                            except:
+                                pass
+
+                # cari tabel koordinat
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -66,6 +85,7 @@ if uploaded_pkkpr:
                                     coords.append((lon, lat))
                             except:
                                 continue
+
         if coords:
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
@@ -77,7 +97,9 @@ if uploaded_pkkpr:
                     coords.append(coords[0])  # Tutup polygon
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
-            st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik).")
+
+        luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
+        st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -113,12 +135,16 @@ if gdf_polygon is not None and gdf_tapak is not None:
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
 
     luas_tapak = gdf_tapak_utm.area.sum()
+    luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
 
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+    - Luas PKKPR (dokumen): {luas_pkkpr_doc:,.2f} m² {f"({luas_pkkpr_doc_label})" if luas_pkkpr_doc_label else ""}
+    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     - Luas di dalam PKKPR: {luas_overlap:,.2f} m²
     - Luas di luar PKKPR: {luas_outside:,.2f} m²
     """)
