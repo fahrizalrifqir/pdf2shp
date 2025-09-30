@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+import re
 
 st.set_page_config(page_title="PDF/Shapefile PKKPR → SHP + Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
@@ -38,6 +39,25 @@ def save_shapefile(gdf, folder_name, zip_name):
             zf.write(os.path.join(folder_name, file), arcname=file)
     return zip_path
 
+def extract_luas_from_pdf(pdf_file):
+    """Cari luas tanah yang disetujui atau dimohon dari teks PDF"""
+    luas_disetujui, luas_dimohon = None, None
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                # cari pola angka
+                match_disetujui = re.search(r"luas.*disetujui.*?([\d\.\,]+)", text, re.IGNORECASE)
+                match_dimohon = re.search(r"luas.*dimohon.*?([\d\.\,]+)", text, re.IGNORECASE)
+
+                if match_disetujui:
+                    luas_str = match_disetujui.group(1).replace(".", "").replace(",", ".")
+                    luas_disetujui = float(luas_str)
+                if match_dimohon:
+                    luas_str = match_dimohon.group(1).replace(".", "").replace(",", ".")
+                    luas_dimohon = float(luas_str)
+    return luas_disetujui, luas_dimohon
+
 # ======================
 # === Upload Files ===
 # ======================
@@ -53,27 +73,17 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 # ======================
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
+        # Ekstrak luas dokumen
+        luas_disetujui, luas_dimohon = extract_luas_from_pdf(uploaded_pkkpr)
+        if luas_disetujui:
+            luas_pkkpr_doc, luas_pkkpr_doc_label = luas_disetujui, "Disetujui"
+        elif luas_dimohon:
+            luas_pkkpr_doc, luas_pkkpr_doc_label = luas_dimohon, "Dimohon"
+
+        # Ekstrak koordinat
         coords = []
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    for line in text.split("\n"):
-                        low = line.lower()
-                        if "luas tanah yang disetujui" in low and luas_pkkpr_doc is None:
-                            try:
-                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
-                                luas_pkkpr_doc_label = "disetujui"
-                            except:
-                                pass
-                        elif "luas tanah yang dimohon" in low and luas_pkkpr_doc is None:
-                            try:
-                                luas_pkkpr_doc = float("".join([c for c in line if c.isdigit() or c == "."]))
-                                luas_pkkpr_doc_label = "dimohon"
-                            except:
-                                pass
-
-                # cari tabel koordinat
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
