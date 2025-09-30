@@ -173,6 +173,15 @@ if gdf_polygon is not None and gdf_tapak is not None:
     """)
     
     st.markdown("---")
+    
+    # === Ekspor SHP Tapak Proyek (UTM) ===
+    st.subheader("⬇️ Download Shapefile Tapak Proyek (UTM)")
+    
+    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
+    with open(zip_tapak, "rb") as f:
+        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
+        
+    st.markdown("---")
 
     # ======================
     # === Layout Peta PNG ===
@@ -208,8 +217,31 @@ if gdf_polygon is not None and gdf_tapak is not None:
     # === Preview Interaktif Folium ===
     # ======================
     st.subheader("🌍 Preview Peta Interaktif")
+    
+    # Tambahkan pilihan tiles/basemap
+    tile_choice = st.selectbox(
+        "Pilih Basemap:",
+        ["OpenStreetMap", "Esri World Imagery", "Stamen Terrain"]
+    )
+    
+    # Mapping pilihan ke Folium provider string
+    if tile_choice == "Esri World Imagery":
+        tile_provider = 'Esri.WorldImagery'
+    elif tile_choice == "Stamen Terrain":
+        tile_provider = 'Stamen Terrain'
+    else:
+        tile_provider = 'OpenStreetMap'
+
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles="cartodbdarkmatter")
+    
+    # Gunakan pilihan tile_provider
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+    
+    # Tambahkan layer control agar pengguna bisa mengganti tiles secara interaktif
+    folium.TileLayer('OpenStreetMap', name='OpenStreetMap').add_to(m)
+    folium.TileLayer('Esri.WorldImagery', name='Esri World Imagery', attr='Esri').add_to(m)
+    folium.TileLayer('Stamen Terrain', name='Stamen Terrain').add_to(m)
+
     folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
     folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
 
@@ -223,4 +255,3 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
-
