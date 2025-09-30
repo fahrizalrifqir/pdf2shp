@@ -9,89 +9,99 @@ import pdfplumber
 import matplotlib.pyplot as plt
 import contextily as ctx
 
-st.set_page_config(page_title="PDF/PKKPR SHP → SHP + Overlay", layout="wide")
-st.title("📌 PDF/PKKPR SHP → Shapefile Converter & Overlay Tapak Proyek")
+st.set_page_config(page_title="PDF/SHP PKKPR → SHP + Overlay", layout="wide")
+st.title("PDF/SHP PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
 # === Upload Files ===
 # ======================
-uploaded_pdf = st.file_uploader("📄 Upload file PDF PKKPR (opsional)", type=["pdf"])
-uploaded_pkkpr_shp = st.file_uploader("📂 Upload Shapefile PKKPR (ZIP, opsional)", type=["zip"])
+uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF atau Shapefile ZIP)", type=["pdf", "zip"])
 uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
 coords = []
-gdf_polygon = None
 gdf_points = None
+gdf_polygon = None
 gdf_tapak = None
 
 # ======================
-# === Ekstrak dari PDF (jika ada) ===
+# === Proses PKKPR ===
 # ======================
-if uploaded_pdf:
-    with pdfplumber.open(uploaded_pdf) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                for row in table:
-                    if row and len(row) >= 3:
-                        try:
-                            lon = float(row[1])
-                            lat = float(row[2])
-                            if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                coords.append((lon, lat))
-                        except:
-                            continue
+if uploaded_pkkpr:
+    filename = uploaded_pkkpr.name.lower()
 
-    if coords:
-        st.success(f"✅ Berhasil menemukan {len(coords)} titik koordinat dari PDF.")
+    # Jika input PKKPR berupa PDF
+    if filename.endswith(".pdf"):
+        with pdfplumber.open(uploaded_pkkpr) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        if row and len(row) >= 3:
+                            try:
+                                lon = float(row[1])
+                                lat = float(row[2])
+                                if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                    coords.append((lon, lat))
+                            except:
+                                continue
 
-        # Buat GeoDataFrame Titik
-        gdf_points = gpd.GeoDataFrame(
-            pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
-            geometry=[Point(xy) for xy in coords],
-            crs="EPSG:4326"
-        )
+        if coords:
+            st.success(f"✅ Berhasil menemukan {len(coords)} titik koordinat dari PDF.")
 
-        # Buat Polygon
-        if len(coords) > 2:
-            if coords[0] != coords[-1]:
-                coords.append(coords[0])  # Tutup polygon
-            poly = Polygon(coords)
-            gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+            # GeoDataFrame Titik
+            gdf_points = gpd.GeoDataFrame(
+                pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
+                geometry=[Point(xy) for xy in coords],
+                crs="EPSG:4326"
+            )
 
-        # Simpan Shapefile hasil ekstraksi
-        shp_folder = "output_shp_pdf"
-        os.makedirs(shp_folder, exist_ok=True)
+            # GeoDataFrame Polygon
+            if len(coords) > 2:
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                poly = Polygon(coords)
+                gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        # Simpan titik
-        shp_path_points = os.path.join(shp_folder, "PKKPR_points.shp")
-        gdf_points.to_file(shp_path_points)
+            # === Simpan Shapefile Titik ===
+            shp_point_folder = "output_shp_points"
+            os.makedirs(shp_point_folder, exist_ok=True)
+            shp_point_path = os.path.join(shp_point_folder, "PKKPR_points.shp")
+            gdf_points.to_file(shp_point_path)
 
-        # Simpan polygon
-        if gdf_polygon is not None:
-            shp_path_poly = os.path.join(shp_folder, "PKKPR_polygon.shp")
-            gdf_polygon.to_file(shp_path_poly)
+            zip_point_filename = "PKKPR_points.zip"
+            with zipfile.ZipFile(zip_point_filename, 'w') as z:
+                for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+                    fpath = shp_point_path.replace(".shp", ext)
+                    if os.path.exists(fpath):
+                        z.write(fpath, os.path.basename(fpath))
+            with open(zip_point_filename, "rb") as f:
+                st.download_button("⬇️ Download Shapefile (PKKPR Titik)", f, "PKKPR_points.zip", mime="application/zip")
 
-        # Zip semua file
-        zip_filename = "PKKPR_fromPDF.zip"
-        with zipfile.ZipFile(zip_filename, 'w') as z:
-            for file in os.listdir(shp_folder):
-                z.write(os.path.join(shp_folder, file), file)
+            # === Simpan Shapefile Polygon ===
+            if gdf_polygon is not None:
+                shp_poly_folder = "output_shp_polygon"
+                os.makedirs(shp_poly_folder, exist_ok=True)
+                shp_poly_path = os.path.join(shp_poly_folder, "PKKPR_polygon.shp")
+                gdf_polygon.to_file(shp_poly_path)
 
-        with open(zip_filename, "rb") as f:
-            st.download_button("⬇️ Download Shapefile (Points + Polygon dari PDF)", f, "PKKPR_fromPDF.zip", mime="application/zip")
+                zip_poly_filename = "PKKPR_polygon.zip"
+                with zipfile.ZipFile(zip_poly_filename, 'w') as z:
+                    for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+                        fpath = shp_poly_path.replace(".shp", ext)
+                        if os.path.exists(fpath):
+                            z.write(fpath, os.path.basename(fpath))
+                with open(zip_poly_filename, "rb") as f:
+                    st.download_button("⬇️ Download Shapefile (PKKPR Polygon)", f, "PKKPR_polygon.zip", mime="application/zip")
+
+    # Jika input PKKPR berupa Shapefile ZIP
+    elif filename.endswith(".zip"):
+        with zipfile.ZipFile(uploaded_pkkpr, "r") as z:
+            z.extractall("pkkpr_shp")
+        gdf_polygon = gpd.read_file("pkkpr_shp")
+        st.success("✅ Shapefile PKKPR berhasil dibaca.")
 
 # ======================
-# === Upload SHP PKKPR (jika ada) ===
-# ======================
-if uploaded_pkkpr_shp:
-    with zipfile.ZipFile(uploaded_pkkpr_shp, "r") as z:
-        z.extractall("pkkpr_shp")
-    gdf_polygon = gpd.read_file("pkkpr_shp")
-    st.success("✅ Shapefile PKKPR berhasil dibaca.")
-
-# ======================
-# === Upload SHP Tapak ===
+# === Upload Tapak Proyek ===
 # ======================
 if uploaded_tapak:
     with zipfile.ZipFile(uploaded_tapak, "r") as z:
@@ -100,10 +110,9 @@ if uploaded_tapak:
     st.success("✅ Shapefile Tapak Proyek berhasil dibaca.")
 
 # ======================
-# === Analisis & Peta ===
+# === Overlay & Analisis ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
-    # Pastikan CRS sama
     gdf_tapak = gdf_tapak.to_crs(epsg=3857)
     gdf_polygon = gdf_polygon.to_crs(epsg=3857)
 
@@ -126,9 +135,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
     gdf_polygon.plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
     gdf_tapak.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
 
+    # Tambahkan basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
-    ax.legend(title="Legenda", loc="lower right")
+    ax.legend()
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
 
     out_png = "layout_peta.png"
@@ -145,18 +155,14 @@ if gdf_polygon is not None and gdf_tapak is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
 
     # PKKPR Polygon
-    folium.GeoJson(
-        gdf_polygon.to_crs(epsg=4326),
-        name="PKKPR",
-        style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}
-    ).add_to(m)
+    folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4},
+                   name="PKKPR").add_to(m)
 
     # Tapak Proyek
-    folium.GeoJson(
-        gdf_tapak.to_crs(epsg=4326),
-        name="Tapak Proyek",
-        style_function=lambda x: {"color": "yellow", "fillOpacity": 0}
-    ).add_to(m)
+    folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "yellow", "fillOpacity": 0},
+                   name="Tapak Proyek").add_to(m)
 
-    folium.LayerControl(collapsed=False).add_to(m)
+    folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
