@@ -44,7 +44,6 @@ def parse_luas(line):
     if not match:
         return None
     num_str = match.group(1)
-    # hilangkan spasi, ubah format ribuan ke float python
     num_str = num_str.replace(".", "").replace(",", ".")
     try:
         return float(num_str)
@@ -152,10 +151,11 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
 
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM {utm_epsg}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
-    - Luas PKKPR (dokumen): {luas_pkkpr_doc:,.2f} m² {f"({luas_pkkpr_doc_label})" if luas_pkkpr_doc_label else ""}
+    - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     - Luas di dalam PKKPR: {luas_overlap:,.2f} m²
     - Luas di luar PKKPR: {luas_outside:,.2f} m²
@@ -178,7 +178,9 @@ if gdf_polygon is not None and gdf_tapak is not None:
     gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
         gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+
+    # hilangkan tulisan attribution
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
     legend_elements = [
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
