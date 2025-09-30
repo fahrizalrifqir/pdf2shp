@@ -135,7 +135,6 @@ if uploaded_pkkpr:
 
     # === Ekspor SHP PKKPR ===
     if gdf_polygon is not None:
-        st.subheader("⬇️ Download Hasil Konversi PKKPR")
         zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
         with open(zip_pkkpr_only, "rb") as f:
             st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
@@ -261,3 +260,4 @@ if gdf_polygon is not None and gdf_tapak is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
