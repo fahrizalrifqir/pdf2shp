@@ -145,19 +145,27 @@ with col1:
 
 # Variabel gdf_tapak diinisialisasi di luar 'if' atau dibaca di dalam 'if'
 if uploaded_tapak:
-    if os.path.exists("tapak_shp"):
-        shutil.rmtree("tapak_shp")
-    with zipfile.ZipFile(uploaded_tapak, "r") as z:
-        z.extractall("tapak_shp")
-    gdf_tapak = gpd.read_file("tapak_shp")
-    if gdf_tapak.crs is None:
-        gdf_tapak.set_crs(epsg=4326, inplace=True)
-    
-    # PESAN SUKSES DIPINDAH KE KOLOM KEDUA
-    with col2:
-        # st.success dihapus, diganti dengan st.markdown untuk tampilan yang lebih sederhana
-        st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ Shapefile Tapak Proyek berhasil dibaca.</p>", unsafe_allow_html=True)
-        # st.markdown harus disesuaikan padding-topnya agar sejajar dengan file_uploader
+    try:
+        if os.path.exists("tapak_shp"):
+            shutil.rmtree("tapak_shp")
+        with zipfile.ZipFile(uploaded_tapak, "r") as z:
+            z.extractall("tapak_shp")
+        gdf_tapak = gpd.read_file("tapak_shp")
+        if gdf_tapak.crs is None:
+            gdf_tapak.set_crs(epsg=4326, inplace=True)
+        
+        # PESAN SUKSES DI KOLOM KEDUA: HANYA TANDA CEKLIS (✅)
+        with col2:
+            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+            
+    except Exception as e:
+        # Jika terjadi error saat membaca (gagal dibaca)
+        gdf_tapak = None
+        with col2:
+            # Contoh pesan jika gagal dibaca
+            st.markdown(f"<p style='color: red; font-weight: bold; padding-top: 3.5rem;'>❌ Gagal dibaca</p>", unsafe_allow_html=True)
+            st.error(f"Error: {e}")
+
 else:
     # Pastikan gdf_tapak tetap None jika file belum di-upload
     gdf_tapak = None
