@@ -52,7 +52,7 @@ gdf_points, gdf_polygon, gdf_tapak = None, None, None
 # ======================
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        # --- Dari PDF ---
+        coords = []  # reset
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 tables = page.extract_tables()
@@ -80,7 +80,8 @@ if uploaded_pkkpr:
             st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik).")
 
     elif uploaded_pkkpr.name.endswith(".zip"):
-        # --- Dari Shapefile ---
+        if os.path.exists("pkkpr_shp"):
+            shutil.rmtree("pkkpr_shp")
         with zipfile.ZipFile(uploaded_pkkpr, "r") as z:
             z.extractall("pkkpr_shp")
         gdf_polygon = gpd.read_file("pkkpr_shp")
@@ -92,6 +93,8 @@ if uploaded_pkkpr:
 # === Upload Tapak Proyek ===
 # ======================
 if uploaded_tapak:
+    if os.path.exists("tapak_shp"):
+        shutil.rmtree("tapak_shp")
     with zipfile.ZipFile(uploaded_tapak, "r") as z:
         z.extractall("tapak_shp")
     gdf_tapak = gpd.read_file("tapak_shp")
@@ -121,25 +124,21 @@ if gdf_polygon is not None and gdf_tapak is not None:
     """)
 
     # === Ekspor SHP hasil ===
-    if gdf_polygon is not None:
-        zip_pkkpr = save_shapefile(gdf_polygon, "out_pkkpr", "PKKPR_Hasil")
-        with open(zip_pkkpr, "rb") as f:
-            st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil.zip", mime="application/zip")
+    zip_pkkpr = save_shapefile(gdf_polygon, "out_pkkpr", "PKKPR_Hasil")
+    with open(zip_pkkpr, "rb") as f:
+        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil.zip", mime="application/zip")
 
-    if gdf_tapak is not None:
-        zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
-        with open(zip_tapak, "rb") as f:
-            st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
+    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
+    with open(zip_tapak, "rb") as f:
+        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
 
     # ======================
     # === Layout Peta PNG ===
     # ======================
     fig, ax = plt.subplots(figsize=(10, 10))
 
-    if gdf_polygon is not None:
-        gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
-    if gdf_tapak is not None:
-        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+    gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
         gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
 
@@ -167,12 +166,12 @@ if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
 
-    if gdf_polygon is not None:
-        folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
-                       style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
-    if gdf_tapak is not None:
-        folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
-                       style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+    folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
+
+    folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
+                   style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
