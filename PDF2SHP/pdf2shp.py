@@ -174,18 +174,18 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     st.markdown("---")
     
-    # === Ekspor SHP Tapak Proyek (UTM) ===
-    st.subheader("⬇️ Download Shapefile Tapak Proyek (UTM)")
-    
-    zip_tapak = save_shapefile(gdf_tapak_utm, "out_tapak", "Tapak_Hasil_UTM")
-    with open(zip_tapak, "rb") as f:
-        st.download_button("⬇️ Download SHP Tapak Proyek (UTM)", f, file_name="Tapak_Hasil_UTM.zip", mime="application/zip")
-        
-    st.markdown("---")
+   
 
     # ======================
     # === Layout Peta PNG ===
     # ======================
+
+        st.pyplot(fig)
+    out_png = "layout_peta.png"
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+        
     st.subheader("🖼️ Layout Peta (PNG)")
     fig, ax = plt.subplots(figsize=(10, 10))
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
@@ -256,3 +256,4 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
+
