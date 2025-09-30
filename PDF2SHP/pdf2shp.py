@@ -13,10 +13,10 @@ st.set_page_config(page_title="PDF Koordinat → SHP + Overlay", layout="wide")
 st.title("PDF Koordinat → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
-# === Upload PDF ===
+# === Upload Files ===
 # ======================
-uploaded_file = st.file_uploader("Upload file PDF PKKPR", type=["pdf"])
-uploaded_shp = st.file_uploader("Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+uploaded_file = st.file_uploader("📄 Upload file PDF PKKPR", type=["pdf"])
+uploaded_shp = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
 coords = []
 gdf_polygon = None
@@ -41,17 +41,19 @@ if uploaded_file:
                             continue
 
     if coords:
-        st.success(f"Berhasil menemukan {len(coords)} titik koordinat.")
+        st.success(f"✅ Berhasil menemukan {len(coords)} titik koordinat dari PDF.")
 
+        # Buat GeoDataFrame Titik
         gdf_points = gpd.GeoDataFrame(
             pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
             geometry=[Point(xy) for xy in coords],
             crs="EPSG:4326"
         )
 
+        # Buat GeoDataFrame Polygon
         if len(coords) > 2:
             if coords[0] != coords[-1]:
-                coords.append(coords[0])
+                coords.append(coords[0])  # Tutup polygon
             poly = Polygon(coords)
             gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
@@ -80,11 +82,12 @@ if uploaded_shp:
         z.extractall("tapak_shp")
     gdf_tapak = gpd.read_file("tapak_shp")
 
-    st.success("Shapefile Tapak Proyek berhasil dibaca.")
+    st.success("✅ Shapefile Tapak Proyek berhasil dibaca.")
 
     if gdf_polygon is not None:
-        # pastikan CRS sama
-        gdf_tapak = gdf_tapak.to_crs(gdf_polygon.crs)
+        # Pastikan CRS sama (gunakan meter / EPSG:3857 untuk luas)
+        gdf_tapak = gdf_tapak.to_crs(epsg=3857)
+        gdf_polygon = gdf_polygon.to_crs(epsg=3857)
 
         luas_tapak = gdf_tapak.area.sum()
         luas_overlap = gdf_tapak.overlay(gdf_polygon, how="intersection").area.sum()
@@ -102,10 +105,11 @@ if uploaded_shp:
         # ======================
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        gdf_polygon.to_crs(epsg=3857).plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
-        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
+        gdf_polygon.plot(ax=ax, color="red", alpha=0.4, edgecolor="none", label="PKKPR")
+        gdf_tapak.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2, label="Tapak Proyek")
 
-        ctx.add_basemap(ax, crs=gdf_polygon.crs.to_string(), source=ctx.providers.Esri.WorldImagery)
+        # Tambahkan basemap
+        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
         ax.legend()
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
@@ -116,3 +120,19 @@ if uploaded_shp:
         with open(out_png, "rb") as f:
             st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
+        # ======================
+        # === Preview Folium ===
+        # ======================
+        st.subheader("🌍 Preview Peta Interaktif")
+        centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
+
+        # PKKPR Polygon
+        folium.GeoJson(gdf_polygon.to_crs(epsg=4326), 
+                       style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+
+        # Tapak Proyek
+        folium.GeoJson(gdf_tapak.to_crs(epsg=4326), 
+                       style_function=lambda x: {"color": "yellow", "fillOpacity": 0}).add_to(m)
+
+        st_folium(m, width=900, height=600)
