@@ -59,7 +59,9 @@ uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", ty
 coords = []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
-
+        
+luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
+        st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info})."
 # ======================
 # === Ekstrak PKKPR ===
 # ======================
@@ -111,8 +113,8 @@ if uploaded_pkkpr:
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
-        luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
-        st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
+       # luas_info = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak ditemukan"
+      #  st.success(f"✅ PKKPR dari PDF berhasil diekstrak ({len(coords)} titik, luas dokumen: {luas_info}).")
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -249,5 +251,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     
     # Menampilkan peta
     st.pyplot(fig)
+
 
 
