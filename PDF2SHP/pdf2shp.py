@@ -287,7 +287,8 @@ if gdf_polygon is not None:
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG)")
     out_png = "layout_peta.png"
-    fig, ax = plt.subplots(figsize=(10, 10))
+    size = st.slider("Ukuran layout (inci)", 4, 12, 6)
+    fig, ax = plt.subplots(figsize=(size, size))
 
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
     if gdf_tapak is not None:
@@ -311,3 +312,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
