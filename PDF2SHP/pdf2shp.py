@@ -63,6 +63,33 @@ def parse_luas(line):
     except:
         return None
 
+# === Tambahan: parsing koordinat DMS ===
+def dms_to_dd(dms_str):
+    """
+    Konversi string DMS → Decimal Degrees.
+    Contoh input:
+      "6°10'12.5\"S" → -6.170139
+      "106°49'30\"E" → 106.825
+    """
+    if not dms_str:
+        return None
+    dms_str = dms_str.strip()
+    match = re.match(r"(\d+)[°:\s](\d+)[':\s](\d+(?:\.\d+)?)[\"\s]*([NSEW])?", dms_str)
+    if not match:
+        return None
+    deg, minutes, seconds, direction = match.groups()
+    dd = float(deg) + float(minutes)/60 + float(seconds)/3600
+    if direction in ["S", "W"]:  # arah selatan atau barat = negatif
+        dd = -dd
+    return dd
+
+def parse_coord(value):
+    """Coba parsing nilai koordinat, bisa desimal langsung atau format DMS."""
+    try:
+        return float(value)
+    except:
+        return dms_to_dd(value)
+
 # ======================
 # === Upload PKKPR ===
 # ======================
@@ -98,10 +125,11 @@ if uploaded_pkkpr:
                     for row in table:
                         if row and len(row) >= 3:
                             try:
-                                lon = float(row[1])
-                                lat = float(row[2])
-                                if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                    coords.append((lon, lat))
+                                lon = parse_coord(row[1])
+                                lat = parse_coord(row[2])
+                                if lon is not None and lat is not None:
+                                    if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                        coords.append((lon, lat))
                             except:
                                 continue
 
@@ -285,6 +313,3 @@ if gdf_polygon is not None and gdf_tapak is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
-
-
