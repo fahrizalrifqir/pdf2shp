@@ -271,9 +271,9 @@ if gdf_polygon is not None and gdf_tapak is not None:
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
     legend_elements = [
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)")
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)")
     ]
     ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
@@ -285,4 +285,5 @@ if gdf_polygon is not None and gdf_tapak is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
