@@ -37,15 +37,12 @@ def save_shapefile(gdf, folder_name, zip_name):
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name, exist_ok=True)
-
     shp_path = os.path.join(folder_name, "data.shp")
     gdf.to_file(shp_path)
-
     zip_path = f"{zip_name}.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
         for file in os.listdir(folder_name):
             zf.write(os.path.join(folder_name, file), arcname=file)
-
     return zip_path
 
 def parse_luas(line):
@@ -63,32 +60,30 @@ def parse_luas(line):
     except:
         return None
 
-# === Tambahan: parsing koordinat DMS ===
 def dms_to_dd(dms_str):
     """
     Konversi string DMS → Decimal Degrees.
-    Contoh input:
-      "6°10'12.5\"S" → -6.170139
-      "106°49'30\"E" → 106.825
+    Bisa baca format dengan koma atau titik.
+    Contoh:
+      "106° 35' 15,369\" BT" → 106.5876025
+      "4° 43' 27,314\" LS"   → -4.724254
     """
-    if not dms_str:
-        return None
-    dms_str = dms_str.strip()
-    match = re.match(r"(\d+)[°:\s](\d+)[':\s](\d+(?:\.\d+)?)[\"\s]*([NSEW])?", dms_str)
+    dms_str = dms_str.strip().replace(",", ".")  # ganti koma jadi titik
+    match = re.match(r"(\d+)[°:\s]+(\d+)[':\s]+(\d+(?:\.\d+)?)[\"\s]*([NSEWBTLS]+)?", dms_str)
     if not match:
         return None
-    deg, minutes, seconds, direction = match.groups()
-    dd = float(deg) + float(minutes)/60 + float(seconds)/3600
-    if direction in ["S", "W"]:  # arah selatan atau barat = negatif
-        dd = -dd
-    return dd
 
-def parse_coord(value):
-    """Coba parsing nilai koordinat, bisa desimal langsung atau format DMS."""
-    try:
-        return float(value)
-    except:
-        return dms_to_dd(value)
+    deg, minutes, seconds, direction = match.groups()
+    dd = float(deg) + float(minutes) / 60 + float(seconds) / 3600
+
+    # arah: Selatan / Barat = negatif
+    if direction:
+        direction = direction.upper()
+        if any(d in direction for d in ["S", "LS"]):
+            dd = -dd
+        if any(d in direction for d in ["W", "BB"]):
+            dd = -dd
+    return dd
 
 # ======================
 # === Upload PKKPR ===
@@ -125,11 +120,10 @@ if uploaded_pkkpr:
                     for row in table:
                         if row and len(row) >= 3:
                             try:
-                                lon = parse_coord(row[1])
-                                lat = parse_coord(row[2])
-                                if lon is not None and lat is not None:
-                                    if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                        coords.append((lon, lat))
+                                lon = dms_to_dd(str(row[1]))
+                                lat = dms_to_dd(str(row[2]))
+                                if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
+                                    coords.append((lon, lat))
                             except:
                                 continue
 
@@ -148,11 +142,9 @@ if uploaded_pkkpr:
                 geometry=[Point(xy) for xy in coords],
                 crs="EPSG:4326"
             )
-
             if len(coords) > 2:
                 if coords[0] != coords[-1]:
                     coords.append(coords[0])  # Tutup polygon
-
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
@@ -182,7 +174,6 @@ if gdf_polygon is not None:
 # === Upload Tapak Proyek (SHP) ===
 # ================================
 col1, col2 = st.columns([0.7, 0.3])
-
 with col1:
     uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
@@ -192,14 +183,11 @@ if uploaded_tapak:
             shutil.rmtree("tapak_shp")
         with zipfile.ZipFile(uploaded_tapak, "r") as z:
             z.extractall("tapak_shp")
-
         gdf_tapak = gpd.read_file("tapak_shp")
         if gdf_tapak.crs is None:
             gdf_tapak.set_crs(epsg=4326, inplace=True)
-
         with col2:
             st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
-
     except Exception as e:
         gdf_tapak = None
         with col2:
@@ -231,7 +219,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
-    - Luas PKKPR (dokumen) (masih salah jangan dipake): {luas_doc_str}
+    - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
     - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
@@ -239,9 +227,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     st.markdown("---")
 
-    # ======================
-    # === Preview Interaktif ===
-    # ======================
+# ======================
+# === Preview Interaktif ===
+# ======================
+if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
 
     tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
@@ -250,7 +239,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     else:
         tile_provider = xyz["OpenStreetMap"]["Mapnik"]
 
-    centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
 
     folium.TileLayer(xyz["OpenStreetMap"]["Mapnik"], name="OpenStreetMap").add_to(m)
@@ -262,18 +251,22 @@ if gdf_polygon is not None and gdf_tapak is not None:
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
-    folium.GeoJson(
-        gdf_tapak.to_crs(epsg=4326),
-        name="Tapak Proyek",
-        style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
-    ).add_to(m)
+    if gdf_tapak is not None:
+        folium.GeoJson(
+            gdf_tapak.to_crs(epsg=4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
+        ).add_to(m)
 
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
                 location=[row.geometry.y, row.geometry.x],
-                radius=5, color="black",
-                fill=True, fill_color="orange", fill_opacity=1,
+                radius=5,
+                color="black",
+                fill=True,
+                fill_color="orange",
+                fill_opacity=1,
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
@@ -282,17 +275,17 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     st.markdown("---")
 
-    # ======================
-    # === Layout Peta PNG ===
-    # ======================
+# ======================
+# === Layout Peta PNG ===
+# ======================
+if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG)")
-
     out_png = "layout_peta.png"
     fig, ax = plt.subplots(figsize=(10, 10))
 
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
-    gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
-
+    if gdf_tapak is not None:
+        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
         gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=50)
 
@@ -308,7 +301,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     ax.set_axis_off()
 
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
-
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
