@@ -60,23 +60,29 @@ def parse_luas(line):
     except:
         return None
 
-def dms_to_dd(dms_str):
+def parse_coordinate(coord_str):
     """
-    Konversi string DMS → Decimal Degrees.
-    Bisa baca format dengan koma atau titik.
-    Contoh:
-      "106° 35' 15,369\" BT" → 106.5876025
-      "4° 43' 27,314\" LS"   → -4.724254
+    Baca koordinat baik dalam format Decimal Degrees atau DMS.
+    Return float (decimal degrees).
     """
-    dms_str = dms_str.strip().replace(",", ".")  # ganti koma jadi titik
-    match = re.match(r"(\d+)[°:\s]+(\d+)[':\s]+(\d+(?:\.\d+)?)[\"\s]*([NSEWBTLS]+)?", dms_str)
+    if coord_str is None:
+        return None
+    coord_str = str(coord_str).strip().replace(",", ".")
+    
+    # Coba langsung float (Decimal Degrees)
+    try:
+        return float(coord_str)
+    except ValueError:
+        pass
+    
+    # Kalau gagal, berarti format DMS → konversi
+    match = re.match(r"(\d+)[°:\s]+(\d+)[':\s]+(\d+(?:\.\d+)?)[\"\s]*([NSEWBTLS]+)?", coord_str)
     if not match:
         return None
-
+    
     deg, minutes, seconds, direction = match.groups()
-    dd = float(deg) + float(minutes) / 60 + float(seconds) / 3600
-
-    # arah: Selatan / Barat = negatif
+    dd = float(deg) + float(minutes)/60 + float(seconds)/3600
+    
     if direction:
         direction = direction.upper()
         if any(d in direction for d in ["S", "LS"]):
@@ -120,8 +126,8 @@ if uploaded_pkkpr:
                     for row in table:
                         if row and len(row) >= 3:
                             try:
-                                lon = dms_to_dd(str(row[1]))
-                                lat = dms_to_dd(str(row[2]))
+                                lon = parse_coordinate(str(row[1]))
+                                lat = parse_coordinate(str(row[2]))
                                 if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
                                     coords.append((lon, lat))
                             except:
