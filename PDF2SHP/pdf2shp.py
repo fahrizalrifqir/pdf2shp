@@ -111,11 +111,15 @@ if uploaded_pkkpr:
                         except:
                             continue
 
-        # pilih koordinat
+        # pilih koordinat + luas
         if coords_disetujui:
             coords = coords_disetujui
-            luas_pkkpr_doc = luas_disetujui
-            luas_pkkpr_doc_label = "disetujui"
+            if luas_disetujui is not None:
+                luas_pkkpr_doc = luas_disetujui
+                luas_pkkpr_doc_label = "disetujui"
+            elif luas_dimohon is not None:
+                luas_pkkpr_doc = luas_dimohon
+                luas_pkkpr_doc_label = "dimohon"
         elif coords_dimohon:
             coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
@@ -211,46 +215,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.markdown("---")
 
 # ======================
-# === Preview Interaktif ===
-# ======================
-if gdf_polygon is not None:
-    st.subheader("🌍 Preview Peta Interaktif")
-
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles="OpenStreetMap")
-
-    folium.GeoJson(
-        gdf_polygon.to_crs(epsg=4326),
-        name="PKKPR",
-        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
-    ).add_to(m)
-
-    if gdf_tapak is not None:
-        folium.GeoJson(
-            gdf_tapak.to_crs(epsg=4326),
-            name="Tapak Proyek",
-            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
-        ).add_to(m)
-
-    if gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker(
-                location=[row.geometry.y, row.geometry.x],
-                radius=5,
-                color="black",
-                fill=True,
-                fill_color="orange",
-                fill_opacity=1,
-                popup=f"Titik {i+1}"
-            ).add_to(m)
-
-    folium.LayerControl().add_to(m)
-    st_folium(m, width=900, height=600)
-
-    st.markdown("---")
-
-# ======================
-# === Layout Peta PNG (Auto Size, Basemap, Legend) ===
+# === Layout Peta PNG (Auto Size & Legend) ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
@@ -262,7 +227,6 @@ if gdf_polygon is not None:
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
     width = xmax - xmin
     height = ymax - ymin
-    bbox_area = width * height
 
     # tentukan orientasi otomatis
     if width > height:
@@ -275,28 +239,16 @@ if gdf_polygon is not None:
     # plot geometri polygon
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
-    # cek tapak proyek
-    use_osm = False
     if gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
-
-        # cek luas tapak dibandingkan luas bounding box
-        tapak_area = gdf_tapak_3857.geometry.area.sum()
-        if tapak_area < 0.01 * bbox_area:   # kalau <1% dari bounding box
-            use_osm = True
 
     if gdf_points is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    # pilih basemap otomatis
-    if use_osm:
-        basemap_source = ctx.providers.OpenStreetMap.Mapnik
-    else:
-        basemap_source = ctx.providers.Esri.WorldImagery
-
-    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
+    # basemap
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
     # zoom out sedikit (buffer 5%)
     dx = width * 0.05
@@ -304,7 +256,7 @@ if gdf_polygon is not None:
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda (sedikit lebih besar dari versi kecil)
+    # legenda
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
                       linestyle="None", markersize=4, label="PKKPR (Titik)"),
