@@ -187,7 +187,6 @@ else:
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Hasil Analisis Overlay")
 
-    # Gunakan UTM sesuai centroid tapak
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -279,16 +278,19 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
+
+    # pilih posisi legenda
     leg = ax.legend(
         handles=legend_elements,
         title="Legenda",
-        loc="lower left",
+        loc="upper right",             # patokan pojok kanan atas
+        bbox_to_anchor=(0.98, 0.98),   # geser sedikit
         fontsize=12,
         title_fontsize=14,
         frameon=True,
         facecolor="white"
     )
-    leg.get_frame().set_alpha(0.7)  # transparan biar peta tetap kelihatan
+    leg.get_frame().set_alpha(0.7)
 
     # judul peta
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=18, weight="bold")
