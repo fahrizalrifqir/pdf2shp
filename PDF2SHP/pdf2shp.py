@@ -22,16 +22,18 @@ st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 # === Fungsi Helper ===
 # ======================
 def get_utm_info(lon, lat):
+    """Deteksi zona UTM dari koordinat lon/lat"""
     zone = int((lon + 180) / 6) + 1
     if lat >= 0:
-        epsg = 32600 + zone
+        epsg = 32600 + zone  # UTM utara
         zone_label = f"{zone}N"
     else:
-        epsg = 32700 + zone
+        epsg = 32700 + zone  # UTM selatan
         zone_label = f"{zone}S"
     return epsg, zone_label
 
 def save_shapefile(gdf, folder_name, zip_name):
+    """Simpan GeoDataFrame ke shapefile dan zip"""
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name, exist_ok=True)
@@ -44,25 +46,22 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas(line):
-    if not line:
+    """Ambil angka luas dari teks PDF (format Indonesia)."""
+    match = re.search(r"([\d\.\,]+)", line)
+    if not match:
         return None
-    s = re.sub(r"\s+", " ", line).strip()
-    matches = re.findall(r"([\d]{1,3}(?:[\.\d{3}]*)(?:,\d+)?|\d+(?:,\d+)?)", s)
-    if not matches:
+    num_str = match.group(1)
+    if "." in num_str and "," in num_str:  # contoh: 149.525,32
+        num_str = num_str.replace(".", "").replace(",", ".")
+    elif "," in num_str:  # contoh: 162,5
+        num_str = num_str.replace(",", ".")
+    try:
+        return float(num_str)
+    except:
         return None
-    nums = []
-    for m in matches:
-        t = m.replace(".", "").replace(",", ".")
-        try:
-            nums.append(float(t))
-        except:
-            continue
-    if not nums:
-        return None
-    candidates = [n for n in nums if n > 100]
-    return max(candidates) if candidates else max(nums)
 
 def parse_coordinate(coord_str):
+    """Baca koordinat decimal atau DMS → return decimal degrees."""
     if coord_str is None:
         return None
     coord_str = str(coord_str).strip().replace(",", ".")
@@ -87,28 +86,26 @@ def parse_coordinate(coord_str):
 # === Upload PKKPR ===
 # ======================
 col1, col2 = st.columns([0.7, 0.3])
-
 with col1:
     uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-coords, coords_dimohon, coords_disetujui = [], [], []
-gdf_points, gdf_polygon, gdf_tapak = None, None, None
+coords, gdf_points, gdf_polygon = [], None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
+        coords_disetujui, coords_dimohon = [], []
         luas_disetujui, luas_dimohon = None, None
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
+            table_mode = None
             for page in pdf.pages:
                 text = page.extract_text()
-                table_mode = None
-
                 if text:
                     for line in text.split("\n"):
-                        low = line.lower()
+                        low = line.lower().strip()
 
-                        # cari luas tanah
+                        # deteksi luas tanah
                         if re.search(r"luas.*disetujui", low) and luas_disetujui is None:
                             luas_disetujui = parse_luas(line)
                         elif re.search(r"luas.*dimohon", low) and luas_dimohon is None:
@@ -120,8 +117,8 @@ if uploaded_pkkpr:
                         elif "koordinat" in low and "dimohon" in low:
                             table_mode = "dimohon"
 
-                        # fallback cari koordinat dari teks langsung
-                        matches = re.findall(r"(\d{2,3}\.\d+)[\s\t]+(-?\d{1,2}\.\d+)", line)
+                        # cari koordinat desimal dalam teks
+                        matches = re.findall(r"(\d{2,3}\.\d+)[\s,;]+(-?\d{1,2}\.\d+)", line)
                         for lon, lat in matches:
                             lon, lat = float(lon), float(lat)
                             if 95 <= lon <= 141 and -11 <= lat <= 6:
@@ -130,7 +127,7 @@ if uploaded_pkkpr:
                                 elif table_mode == "dimohon":
                                     coords_dimohon.append((lon, lat))
 
-                # baca tabel koordinat jika ada
+                # coba baca tabel juga
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -156,6 +153,7 @@ if uploaded_pkkpr:
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
 
+        # buat geodataframe
         if coords:
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
@@ -182,19 +180,20 @@ if uploaded_pkkpr:
         with col2:
             st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
 
-# Ekspor SHP PKKPR
+# === Ekspor SHP PKKPR ===
 if gdf_polygon is not None:
     zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
     with open(zip_pkkpr_only, "rb") as f:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
 # ======================
-# === Upload Tapak Proyek ===
+# === Upload Tapak Proyek (SHP) ===
 # ======================
 col1, col2 = st.columns([0.7, 0.3])
 with col1:
     uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
 
+gdf_tapak = None
 if uploaded_tapak:
     try:
         if os.path.exists("tapak_shp"):
@@ -207,49 +206,41 @@ if uploaded_tapak:
         with col2:
             st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
     except Exception as e:
-        gdf_tapak = None
         with col2:
             st.markdown("<p style='color: red; font-weight: bold; padding-top: 3.5rem;'>❌ Gagal dibaca</p>", unsafe_allow_html=True)
         st.error(f"Error: {e}")
-else:
-    gdf_tapak = None
 
 # ======================
 # === Analisis Overlay ===
 # ======================
 if gdf_polygon is not None:
-    st.subheader("📊 Hasil Analisis Overlay")
-
+    st.subheader("📊 Hasil Analisis PKKPR")
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
 
-    if gdf_tapak is None:
-        luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
-        st.info(f"""
-        **Analisis PKKPR (Proyeksi UTM Zona {utm_zone}):**
-        - Luas PKKPR (dokumen): {luas_doc_str}
-        - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-        """)
-    else:
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+
+    st.info(f"""
+    **Analisis Luas PKKPR (Proyeksi UTM Zona {utm_zone}):**
+    - Luas PKKPR (dokumen): {luas_doc_str}
+    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    """)
+
+    if gdf_tapak is not None:
         gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
         luas_tapak = gdf_tapak_utm.area.sum()
         luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
         luas_outside = luas_tapak - luas_overlap
-        luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
         st.info(f"""
-        **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
+        **Analisis Tapak Proyek:**
         - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
-        - Luas PKKPR (dokumen): {luas_doc_str}
-        - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
         - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
         - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
         """)
-
-    st.markdown("---")
 
 # ======================
 # === Preview Interaktif ===
@@ -258,10 +249,7 @@ if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
 
     tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
-    if tile_choice == "Esri World Imagery":
-        tile_provider = xyz["Esri"]["WorldImagery"]
-    else:
-        tile_provider = xyz["OpenStreetMap"]["Mapnik"]
+    tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
 
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
@@ -297,8 +285,6 @@ if gdf_polygon is not None:
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
 
-    st.markdown("---")
-
 # ======================
 # === Layout Peta PNG ===
 # ======================
@@ -320,7 +306,6 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-
     ax.legend(
         handles=legend_elements,
         title="Peta Kesesuaian Tapak Proyek dengan PKKPR",
@@ -332,7 +317,6 @@ if gdf_polygon is not None:
     )
 
     ax.set_axis_off()
-
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
