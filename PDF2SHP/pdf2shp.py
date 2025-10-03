@@ -102,7 +102,7 @@ if uploaded_pkkpr:
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
-                table_mode = None  # state: "disetujui", "dimohon", atau None
+                table_mode = None
 
                 if text:
                     for line in text.split("\n"):
@@ -112,13 +112,11 @@ if uploaded_pkkpr:
                         elif re.search(r"luas\s+tanah\s+yang\s+dimohon", low) and luas_dimohon is None:
                             luas_dimohon = parse_luas(line)
 
-                        # deteksi header tabel
                         if "tabel koordinat" in low and "disetujui" in low:
                             table_mode = "disetujui"
                         elif "tabel koordinat" in low and "dimohon" in low:
                             table_mode = "dimohon"
 
-                # baca tabel
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -134,7 +132,6 @@ if uploaded_pkkpr:
                             except:
                                 continue
 
-        # pilih koordinat prioritas
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui
@@ -233,8 +230,8 @@ if gdf_polygon is not None:
         - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
         - Luas PKKPR (dokumen): {luas_doc_str}
         - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-        - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-        - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+        - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
+        - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
         """)
 
     st.markdown("---")
@@ -308,7 +305,16 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-    ax.legend(handles=legend_elements, loc="upper right", fontsize=10, frameon=True)
+
+    # Legend di luar area peta (kanan atas)
+    ax.legend(
+        handles=legend_elements,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+        fontsize=10,
+        frameon=True
+    )
+
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
     ax.set_axis_off()
 
@@ -317,4 +323,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
