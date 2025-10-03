@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+import xyzservices.providers as xyz
 
 # ======================
 # === Konfigurasi App ===
@@ -111,7 +112,7 @@ if uploaded_pkkpr:
                         except:
                             continue
 
-        # pilih koordinat + luas
+        # pilih koordinat + luas (fallback jika luas disetujui kosong)
         if coords_disetujui:
             coords = coords_disetujui
             if luas_disetujui is not None:
@@ -215,6 +216,48 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.markdown("---")
 
 # ======================
+# === Preview Interaktif ===
+# ======================
+if gdf_polygon is not None:
+    st.subheader("🌍 Preview Peta Interaktif")
+
+    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
+    tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
+
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+
+    folium.GeoJson(
+        gdf_polygon.to_crs(epsg=4326),
+        name="PKKPR",
+        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
+    ).add_to(m)
+
+    if gdf_tapak is not None:
+        folium.GeoJson(
+            gdf_tapak.to_crs(epsg=4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
+        ).add_to(m)
+
+    if gdf_points is not None:
+        for i, row in gdf_points.iterrows():
+            folium.CircleMarker(
+                location=[row.geometry.y, row.geometry.x],
+                radius=5,
+                color="black",
+                fill=True,
+                fill_color="orange",
+                fill_opacity=1,
+                popup=f"Titik {i+1}"
+            ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+    st_folium(m, width=900, height=600)
+
+    st.markdown("---")
+
+# ======================
 # === Layout Peta PNG (Auto Size & Legend) ===
 # ======================
 if gdf_polygon is not None:
@@ -229,10 +272,7 @@ if gdf_polygon is not None:
     height = ymax - ymin
 
     # tentukan orientasi otomatis
-    if width > height:
-        figsize = (14, 10)   # landscape
-    else:
-        figsize = (10, 14)   # portrait
+    figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
 
@@ -247,7 +287,7 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    # basemap
+    # basemap selalu Esri WorldImagery (default)
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
     # zoom out sedikit (buffer 5%)
