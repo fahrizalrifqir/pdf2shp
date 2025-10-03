@@ -267,33 +267,40 @@ if gdf_polygon is not None:
     if gdf_tapak is not None:
         gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
-        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=60)
+        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=40)
 
     # basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
-    # legenda
+    # set extent agar lebih longgar (tidak menutupi legenda)
+    bounds = gdf_polygon.to_crs(3857).total_bounds
+    x_min, y_min, x_max, y_max = bounds
+    pad_x = (x_max - x_min) * 0.2
+    pad_y = (y_max - y_min) * 0.2
+    ax.set_xlim(x_min - pad_x, x_max + pad_x)
+    ax.set_ylim(y_min - pad_y, y_max + pad_y)
+
+    # legenda (diperkecil)
     legend_elements = [
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)"),
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=6, label="PKKPR (Titik)"),
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
 
-    # pilih posisi legenda
     leg = ax.legend(
         handles=legend_elements,
         title="Legenda",
-        loc="upper right",             # patokan pojok kanan atas
-        bbox_to_anchor=(0.98, 0.98),   # geser sedikit
-        fontsize=12,
-        title_fontsize=14,
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=10,
+        title_fontsize=12,
         frameon=True,
         facecolor="white"
     )
     leg.get_frame().set_alpha(0.7)
 
     # judul peta
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=18, weight="bold")
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=16, weight="bold")
 
     # hilangkan axis
     ax.set_axis_off()
