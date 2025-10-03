@@ -306,18 +306,16 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
 
-    # Legend dengan judul di dalam kotak
+    # Legend di luar area peta (kanan atas)
     ax.legend(
         handles=legend_elements,
-        title="Peta Kesesuaian Tapak Proyek dengan PKKPR",
         loc="upper left",
         bbox_to_anchor=(1.02, 1),
         fontsize=10,
-        title_fontsize=12,
         frameon=True
     )
 
-    # hilangkan title bawaan di atas
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
     ax.set_axis_off()
 
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
@@ -325,5 +323,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
-
