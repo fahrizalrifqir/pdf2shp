@@ -267,36 +267,34 @@ if gdf_polygon is not None:
     if gdf_tapak is not None:
         gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
-        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=40)
+        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30)
 
     # basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
-    # set extent agar lebih longgar (tidak menutupi legenda)
-    bounds = gdf_polygon.to_crs(3857).total_bounds
-    x_min, y_min, x_max, y_max = bounds
-    pad_x = (x_max - x_min) * 0.2
-    pad_y = (y_max - y_min) * 0.2
-    ax.set_xlim(x_min - pad_x, x_max + pad_x)
-    ax.set_ylim(y_min - pad_y, y_max + pad_y)
+    # === Zoom out sedikit (buffer 5%) ===
+    xmin, ymin, xmax, ymax = gdf_polygon.to_crs(epsg=3857).total_bounds
+    dx = (xmax - xmin) * 0.05
+    dy = (ymax - ymin) * 0.05
+    ax.set_xlim(xmin - dx, xmax + dx)
+    ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda (diperkecil)
-     legend_elements = [
+    # legenda kecil (1/4 dari awal)
+    legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
-                      linestyle="None", markersize=3, label="PKKPR (Titik)"),  # kecil
+                      linestyle="None", markersize=3, label="PKKPR (Titik)"),
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-
     leg = ax.legend(
         handles=legend_elements,
         title="Legenda",
         loc="upper right",
         bbox_to_anchor=(0.98, 0.98),
-        fontsize=6,          # lebih kecil
-        title_fontsize=7,    # lebih kecil
-        markerscale=0.5,     # perkecil simbol
-        labelspacing=0.2,    # jarak antar item lebih rapat
+        fontsize=6,
+        title_fontsize=7,
+        markerscale=0.5,
+        labelspacing=0.2,
         frameon=True,
         facecolor="white"
     )
@@ -313,4 +311,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, A3)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
