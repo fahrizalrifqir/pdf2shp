@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
 
 # ======================
@@ -112,15 +113,11 @@ if uploaded_pkkpr:
                         except:
                             continue
 
-        # pilih koordinat + luas (fallback jika luas disetujui kosong)
+        # pilih koordinat & luas
         if coords_disetujui:
             coords = coords_disetujui
-            if luas_disetujui is not None:
-                luas_pkkpr_doc = luas_disetujui
-                luas_pkkpr_doc_label = "disetujui"
-            elif luas_dimohon is not None:
-                luas_pkkpr_doc = luas_dimohon
-                luas_pkkpr_doc_label = "dimohon"
+            luas_pkkpr_doc = luas_disetujui if luas_disetujui is not None else luas_dimohon
+            luas_pkkpr_doc_label = "disetujui" if luas_disetujui is not None else "dimohon"
         elif coords_dimohon:
             coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
@@ -209,8 +206,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+    - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
 
     st.markdown("---")
@@ -226,6 +223,9 @@ if gdf_polygon is not None:
 
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+
+    # plugin fullscreen di pojok kiri bawah
+    Fullscreen(position="bottomleft").add_to(m)
 
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
@@ -272,7 +272,10 @@ if gdf_polygon is not None:
     height = ymax - ymin
 
     # tentukan orientasi otomatis
-    figsize = (14, 10) if width > height else (10, 14)
+    if width > height:
+        figsize = (14, 10)   # landscape
+    else:
+        figsize = (10, 14)   # portrait
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
 
@@ -287,8 +290,16 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    # basemap selalu Esri WorldImagery (default)
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+    # pilih basemap otomatis
+    use_osm = False
+    if gdf_tapak is not None:
+        tapak_area = gdf_tapak_3857.geometry.area.sum()
+        bbox_area = width * height
+        if tapak_area < 0.01 * bbox_area:
+            use_osm = True
+
+    basemap_source = ctx.providers.OpenStreetMap.Mapnik if use_osm else ctx.providers.Esri.WorldImagery
+    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
 
     # zoom out sedikit (buffer 5%)
     dx = width * 0.05
@@ -296,11 +307,11 @@ if gdf_polygon is not None:
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda
+    # legenda agak diperbesar
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
-                      linestyle="None", markersize=4, label="PKKPR (Titik)"),
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1, label="PKKPR (Polygon)"),
+                      linestyle="None", markersize=5, label="PKKPR (Titik)"),
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
 
@@ -309,9 +320,9 @@ if gdf_polygon is not None:
         title="Legenda",
         loc="upper right",
         bbox_to_anchor=(0.98, 0.98),
-        fontsize=7,
-        title_fontsize=8,
-        markerscale=0.7,
+        fontsize=8,
+        title_fontsize=9,
+        markerscale=0.8,
         labelspacing=0.3,
         frameon=True,
         facecolor="white"
@@ -331,4 +342,3 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
-
