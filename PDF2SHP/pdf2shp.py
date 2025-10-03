@@ -46,43 +46,42 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas(line):
-    """Ambil angka luas dari teks PDF (format Indonesia: titik ribuan, koma desimal)."""
-    match = re.search(r"([\d\.\,]+)", line)
-    if not match:
+    """Ekstraksi angka luas dari baris teks PDF (format Indonesia)."""
+    if not line:
         return None
-    num_str = match.group(1)
-    if "." in num_str and "," in num_str:  # contoh: 149.525,32
-        num_str = num_str.replace(".", "").replace(",", ".")
-    elif "," in num_str:  # contoh: 162,5
-        num_str = num_str.replace(",", ".")
-    try:
-        return float(num_str)
-    except:
+    s = re.sub(r"\s+", " ", line).strip()
+    matches = re.findall(r"([\d]{1,3}(?:[\.\d{3}]*)(?:,\d+)?|\d+(?:,\d+)?)", s)
+    if not matches:
         return None
+    nums = []
+    for m in matches:
+        t = m.replace(".", "").replace(",", ".")
+        try:
+            nums.append(float(t))
+        except:
+            continue
+    if not nums:
+        return None
+    # pilih angka > 100 jika ada, atau angka terbesar
+    candidates = [n for n in nums if n > 100]
+    if candidates:
+        return max(candidates)
+    return max(nums)
 
 def parse_coordinate(coord_str):
-    """
-    Baca koordinat baik dalam format Decimal Degrees atau DMS.
-    Return float (decimal degrees).
-    """
+    """Konversi koordinat ke decimal degrees (bisa DMS atau DD)."""
     if coord_str is None:
         return None
     coord_str = str(coord_str).strip().replace(",", ".")
-    
-    # Coba langsung float (Decimal Degrees)
     try:
         return float(coord_str)
     except ValueError:
         pass
-    
-    # Kalau gagal, berarti format DMS → konversi
     match = re.match(r"(\d+)[°:\s]+(\d+)[':\s]+(\d+(?:\.\d+)?)[\"\s]*([NSEWBTLS]+)?", coord_str)
     if not match:
         return None
-    
     deg, minutes, seconds, direction = match.groups()
     dd = float(deg) + float(minutes)/60 + float(seconds)/3600
-    
     if direction:
         direction = direction.upper()
         if any(d in direction for d in ["S", "LS"]):
@@ -115,12 +114,11 @@ if uploaded_pkkpr:
                 if text:
                     for line in text.split("\n"):
                         low = line.lower()
-                        if "luas tanah yang disetujui" in low and luas_disetujui is None:
+                        if re.search(r"luas\s+tanah\s+yang\s+disetujui", low) and luas_disetujui is None:
                             luas_disetujui = parse_luas(line)
-                        elif "luas tanah yang dimohon" in low and luas_dimohon is None:
+                        elif re.search(r"luas\s+tanah\s+yang\s+dimohon", low) and luas_dimohon is None:
                             luas_dimohon = parse_luas(line)
 
-                # Cari tabel koordinat
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -133,7 +131,6 @@ if uploaded_pkkpr:
                             except:
                                 continue
 
-        # Pilih luas
         if luas_disetujui is not None:
             luas_pkkpr_doc = luas_disetujui
             luas_pkkpr_doc_label = "disetujui"
@@ -141,7 +138,6 @@ if uploaded_pkkpr:
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
 
-        # Buat geodataframe dari koordinat
         if coords:
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
@@ -150,7 +146,7 @@ if uploaded_pkkpr:
             )
             if len(coords) > 2:
                 if coords[0] != coords[-1]:
-                    coords.append(coords[0])  # Tutup polygon
+                    coords.append(coords[0])
                 poly = Polygon(coords)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
@@ -208,7 +204,6 @@ else:
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Hasil Analisis Overlay")
 
-    # Gunakan UTM sesuai centroid tapak
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -311,6 +306,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
-
-
