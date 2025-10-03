@@ -107,16 +107,20 @@ if uploaded_pkkpr:
                 if text:
                     for line in text.split("\n"):
                         low = line.lower()
-                        if re.search(r"luas\s+tanah\s+yang\s+disetujui", low) and luas_disetujui is None:
+
+                        # cari luas tanah
+                        if re.search(r"luas.*disetujui", low) and luas_disetujui is None:
                             luas_disetujui = parse_luas(line)
-                        elif re.search(r"luas\s+tanah\s+yang\s+dimohon", low) and luas_dimohon is None:
+                        elif re.search(r"luas.*dimohon", low) and luas_dimohon is None:
                             luas_dimohon = parse_luas(line)
 
-                        if "tabel koordinat" in low and "disetujui" in low:
+                        # deteksi judul tabel koordinat
+                        if "koordinat" in low and "disetujui" in low:
                             table_mode = "disetujui"
-                        elif "tabel koordinat" in low and "dimohon" in low:
+                        elif "koordinat" in low and "dimohon" in low:
                             table_mode = "dimohon"
 
+                # baca tabel koordinat
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -132,6 +136,7 @@ if uploaded_pkkpr:
                             except:
                                 continue
 
+        # pilih koordinat: disetujui > dimohon
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui
@@ -306,16 +311,16 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
 
-    # Legend di luar area peta (kanan atas)
     ax.legend(
         handles=legend_elements,
+        title="Peta Kesesuaian Tapak Proyek dengan PKKPR",
         loc="upper left",
         bbox_to_anchor=(1.02, 1),
         fontsize=10,
+        title_fontsize=12,
         frameon=True
     )
 
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
     ax.set_axis_off()
 
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
@@ -323,4 +328,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
