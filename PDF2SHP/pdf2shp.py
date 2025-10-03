@@ -155,24 +155,62 @@ if gdf_polygon is not None:
     with open(zip_pkkpr_only, "rb") as f:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
+# ================================
+# === Upload Tapak Proyek (SHP) ===
+# ================================
+col1, col2 = st.columns([0.7, 0.3])
+with col1:
+    uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+
+if uploaded_tapak:
+    try:
+        if os.path.exists("tapak_shp"):
+            shutil.rmtree("tapak_shp")
+        with zipfile.ZipFile(uploaded_tapak, "r") as z:
+            z.extractall("tapak_shp")
+        gdf_tapak = gpd.read_file("tapak_shp")
+        if gdf_tapak.crs is None:
+            gdf_tapak.set_crs(epsg=4326, inplace=True)
+        with col2:
+            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+    except Exception as e:
+        gdf_tapak = None
+        with col2:
+            st.markdown("<p style='color: red; font-weight: bold; padding-top: 3.5rem;'>❌ Gagal dibaca</p>", unsafe_allow_html=True)
+        st.error(f"Error: {e}")
+else:
+    gdf_tapak = None
+
 # ======================
-# === Analisis Luas ===
+# === Analisis Overlay ===
 # ======================
-if gdf_polygon is not None:
-    st.subheader("📊 Hasil Analisis PKKPR")
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+if gdf_polygon is not None and gdf_tapak is not None:
+    st.subheader("📊 Hasil Analisis Overlay")
+
+    # Gunakan UTM sesuai centroid tapak
+    centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
+    gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
+
+    luas_tapak = gdf_tapak_utm.area.sum()
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+    luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
+    luas_outside = luas_tapak - luas_overlap
 
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
-    **Analisis Luas PKKPR (Proyeksi UTM Zona {utm_zone}):**
+    **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
+    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
+
+    st.markdown("---")
 
 # ======================
 # === Preview Interaktif ===
@@ -192,6 +230,13 @@ if gdf_polygon is not None:
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
+    if gdf_tapak is not None:
+        folium.GeoJson(
+            gdf_tapak.to_crs(epsg=4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
+        ).add_to(m)
+
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
@@ -207,6 +252,8 @@ if gdf_polygon is not None:
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
 
+    st.markdown("---")
+
 # ======================
 # === Layout Peta PNG (A3) ===
 # ======================
@@ -218,6 +265,8 @@ if gdf_polygon is not None:
 
     # plot geometri
     gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    if gdf_tapak is not None:
+        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
     if gdf_points is not None:
         gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=60)
 
@@ -227,7 +276,8 @@ if gdf_polygon is not None:
     # legenda
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)"),
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)")
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
+        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
     leg = ax.legend(
         handles=legend_elements,
