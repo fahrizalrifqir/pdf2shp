@@ -120,7 +120,17 @@ if uploaded_pkkpr:
                         elif "koordinat" in low and "dimohon" in low:
                             table_mode = "dimohon"
 
-                # baca tabel koordinat
+                        # fallback cari koordinat dari teks langsung
+                        matches = re.findall(r"(\d{2,3}\.\d+)[\s\t]+(-?\d{1,2}\.\d+)", line)
+                        for lon, lat in matches:
+                            lon, lat = float(lon), float(lat)
+                            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                if table_mode == "disetujui":
+                                    coords_disetujui.append((lon, lat))
+                                elif table_mode == "dimohon":
+                                    coords_dimohon.append((lon, lat))
+
+                # baca tabel koordinat jika ada
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
