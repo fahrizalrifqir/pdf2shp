@@ -10,12 +10,11 @@ import matplotlib.pyplot as plt
 import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
-import xyzservices.providers as xyz
 
 # ======================
 # === Konfigurasi App ===
 # ======================
-st.set_page_config(page_title="PDF/Shapefile PKKPR → SHP + Overlay", layout="wide")
+st.set_page_config(page_title="PKKPR → SHP + Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
@@ -99,7 +98,7 @@ if uploaded_pkkpr:
                         table_mode = "dimohon"
                         continue
 
-                    # regex cari koordinat: "No, Bujur, Lintang"
+                    # regex cari koordinat
                     m = re.match(r"^\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
@@ -112,7 +111,7 @@ if uploaded_pkkpr:
                         except:
                             continue
 
-        # pilih koordinat: disetujui > dimohon
+        # pilih koordinat
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui
@@ -217,11 +216,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
 
-    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
-    tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
-
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles="OpenStreetMap")
 
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
@@ -254,38 +250,55 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # ======================
-# === Layout Peta PNG (A3) ===
+# === Layout Peta PNG (Auto Size & Legend) ===
 # ======================
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG) - Format A3")
+    st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
 
     out_png = "layout_peta.png"
-    fig, ax = plt.subplots(figsize=(16.5, 11.7), dpi=150)  # A3 landscape
 
-    # plot geometri
-    gdf_polygon.to_crs(epsg=3857).plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    # ambil bounding box polygon
+    gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+    xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+    width = xmax - xmin
+    height = ymax - ymin
+
+    # tentukan orientasi otomatis
+    if width > height:
+        figsize = (14, 10)   # landscape
+    else:
+        figsize = (10, 14)   # portrait
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
+
+    # plot geometri polygon
+    gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+
     if gdf_tapak is not None:
-        gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+        gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+        gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+
     if gdf_points is not None:
-        gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30)
+        gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+        gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
     # basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
-    # === Zoom out sedikit (buffer 5%) ===
-    xmin, ymin, xmax, ymax = gdf_polygon.to_crs(epsg=3857).total_bounds
-    dx = (xmax - xmin) * 0.05
-    dy = (ymax - ymin) * 0.05
+    # zoom out sedikit (buffer 5%)
+    dx = width * 0.05
+    dy = height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda kecil (1/4 dari awal)
+    # legenda kecil
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
                       linestyle="None", markersize=3, label="PKKPR (Titik)"),
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
+
     leg = ax.legend(
         handles=legend_elements,
         title="Legenda",
@@ -301,13 +314,15 @@ if gdf_polygon is not None:
     leg.get_frame().set_alpha(0.7)
 
     # judul peta
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=16, weight="bold")
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
 
     # hilangkan axis
     ax.set_axis_off()
 
+    # simpan PNG
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG, A3)", f, "layout_peta.png", mime="image/png")
+        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
+    # tampilkan di streamlit
     st.pyplot(fig)
