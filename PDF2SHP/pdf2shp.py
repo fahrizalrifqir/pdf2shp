@@ -281,9 +281,10 @@ if gdf_polygon is not None:
     ax.set_ylim(y_min - pad_y, y_max + pad_y)
 
     # legenda (diperkecil)
-    legend_elements = [
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=6, label="PKKPR (Titik)"),
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
+     legend_elements = [
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
+                      linestyle="None", markersize=3, label="PKKPR (Titik)"),  # kecil
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
 
@@ -292,8 +293,10 @@ if gdf_polygon is not None:
         title="Legenda",
         loc="upper right",
         bbox_to_anchor=(0.98, 0.98),
-        fontsize=10,
-        title_fontsize=12,
+        fontsize=6,          # lebih kecil
+        title_fontsize=7,    # lebih kecil
+        markerscale=0.5,     # perkecil simbol
+        labelspacing=0.2,    # jarak antar item lebih rapat
         frameon=True,
         facecolor="white"
     )
@@ -310,3 +313,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, A3)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
