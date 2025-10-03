@@ -250,7 +250,7 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # ======================
-# === Layout Peta PNG (Auto Size & Legend) ===
+# === Layout Peta PNG (Auto Size, Basemap, Legend) ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
@@ -262,6 +262,7 @@ if gdf_polygon is not None:
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
     width = xmax - xmin
     height = ymax - ymin
+    bbox_area = width * height
 
     # tentukan orientasi otomatis
     if width > height:
@@ -274,16 +275,28 @@ if gdf_polygon is not None:
     # plot geometri polygon
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
+    # cek tapak proyek
+    use_osm = False
     if gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+
+        # cek luas tapak dibandingkan luas bounding box
+        tapak_area = gdf_tapak_3857.geometry.area.sum()
+        if tapak_area < 0.01 * bbox_area:   # kalau <1% dari bounding box
+            use_osm = True
 
     if gdf_points is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    # basemap
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+    # pilih basemap otomatis
+    if use_osm:
+        basemap_source = ctx.providers.OpenStreetMap.Mapnik
+    else:
+        basemap_source = ctx.providers.Esri.WorldImagery
+
+    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
 
     # zoom out sedikit (buffer 5%)
     dx = width * 0.05
@@ -291,10 +304,10 @@ if gdf_polygon is not None:
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda kecil
+    # legenda (sedikit lebih besar dari versi kecil)
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
-                      linestyle="None", markersize=3, label="PKKPR (Titik)"),
+                      linestyle="None", markersize=4, label="PKKPR (Titik)"),
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
@@ -304,10 +317,10 @@ if gdf_polygon is not None:
         title="Legenda",
         loc="upper right",
         bbox_to_anchor=(0.98, 0.98),
-        fontsize=6,
-        title_fontsize=7,
-        markerscale=0.5,
-        labelspacing=0.2,
+        fontsize=7,
+        title_fontsize=8,
+        markerscale=0.7,
+        labelspacing=0.3,
         frameon=True,
         facecolor="white"
     )
