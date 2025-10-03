@@ -22,18 +22,16 @@ st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 # === Fungsi Helper ===
 # ======================
 def get_utm_info(lon, lat):
-    """Deteksi zona UTM dari koordinat lon/lat"""
     zone = int((lon + 180) / 6) + 1
     if lat >= 0:
-        epsg = 32600 + zone  # UTM utara
+        epsg = 32600 + zone
         zone_label = f"{zone}N"
     else:
-        epsg = 32700 + zone  # UTM selatan
+        epsg = 32700 + zone
         zone_label = f"{zone}S"
     return epsg, zone_label
 
 def save_shapefile(gdf, folder_name, zip_name):
-    """Simpan GeoDataFrame ke shapefile dan zip"""
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name, exist_ok=True)
@@ -46,7 +44,6 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas(line):
-    """Ekstraksi angka luas dari baris teks PDF (format Indonesia)."""
     if not line:
         return None
     s = re.sub(r"\s+", " ", line).strip()
@@ -62,14 +59,10 @@ def parse_luas(line):
             continue
     if not nums:
         return None
-    # pilih angka > 100 jika ada, atau angka terbesar
     candidates = [n for n in nums if n > 100]
-    if candidates:
-        return max(candidates)
-    return max(nums)
+    return max(candidates) if candidates else max(nums)
 
 def parse_coordinate(coord_str):
-    """Konversi koordinat ke decimal degrees (bisa DMS atau DD)."""
     if coord_str is None:
         return None
     coord_str = str(coord_str).strip().replace(",", ".")
@@ -103,11 +96,9 @@ gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
-    # Jika PDF
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords = []
         luas_disetujui, luas_dimohon = None, None
-
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -153,7 +144,6 @@ if uploaded_pkkpr:
         with col2:
             st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik</p>", unsafe_allow_html=True)
 
-    # Jika Shapefile ZIP
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
             shutil.rmtree("pkkpr_shp")
@@ -162,19 +152,18 @@ if uploaded_pkkpr:
         gdf_polygon = gpd.read_file("pkkpr_shp")
         if gdf_polygon.crs is None:
             gdf_polygon.set_crs(epsg=4326, inplace=True)
-
         with col2:
             st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
 
-# === Ekspor SHP PKKPR ===
+# Ekspor SHP PKKPR
 if gdf_polygon is not None:
     zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
     with open(zip_pkkpr_only, "rb") as f:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
-# ================================
-# === Upload Tapak Proyek (SHP) ===
-# ================================
+# ======================
+# === Upload Tapak Proyek ===
+# ======================
 col1, col2 = st.columns([0.7, 0.3])
 with col1:
     uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
@@ -201,30 +190,37 @@ else:
 # ======================
 # === Analisis Overlay ===
 # ======================
-if gdf_polygon is not None and gdf_tapak is not None:
+if gdf_polygon is not None:
     st.subheader("📊 Hasil Analisis Overlay")
 
-    centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
-    gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
-
-    luas_tapak = gdf_tapak_utm.area.sum()
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
-    luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
-    luas_outside = luas_tapak - luas_overlap
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    if gdf_tapak is None:
+        luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+        st.info(f"""
+        **Analisis PKKPR (Proyeksi UTM Zona {utm_zone}):**
+        - Luas PKKPR (dokumen): {luas_doc_str}
+        - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+        """)
+    else:
+        gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
+        luas_tapak = gdf_tapak_utm.area.sum()
+        luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
+        luas_outside = luas_tapak - luas_overlap
+        luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
-    st.info(f"""
-    **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
-    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
-    - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
-    """)
+        st.info(f"""
+        **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
+        - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+        - Luas PKKPR (dokumen): {luas_doc_str}
+        - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+        - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
+        - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+        """)
 
     st.markdown("---")
 
@@ -306,4 +302,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
