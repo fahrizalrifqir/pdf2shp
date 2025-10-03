@@ -11,6 +11,7 @@ import contextily as ctx
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import xyzservices.providers as xyz
+import matplotlib.transforms as mtransforms
 
 # ======================
 # === Konfigurasi App ===
@@ -59,6 +60,35 @@ def parse_luas(line):
         return float(num_str)
     except:
         return None
+
+def add_north_arrow(ax, size=0.1, loc_x=0.95, loc_y=0.95):
+    """Tambahkan north arrow ke plot"""
+    ax.annotate('N',
+                xy=(loc_x, loc_y), xytext=(loc_x, loc_y-size),
+                xycoords='axes fraction',
+                fontsize=14, ha='center',
+                arrowprops=dict(facecolor='black', width=5, headwidth=15))
+
+def add_scale_bar(ax, length, location=(0.1, 0.05), linewidth=3):
+    """Tambahkan skala grafis sederhana (dalam meter)"""
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    scalebar_x = x0 + (x1 - x0) * location[0]
+    scalebar_y = y0 + (y1 - y0) * location[1]
+
+    ax.hlines(scalebar_y, scalebar_x, scalebar_x + length, colors='black', linewidth=linewidth)
+    ax.vlines([scalebar_x, scalebar_x + length], scalebar_y - (y1-y0)*0.005, scalebar_y + (y1-y0)*0.005, colors='black', linewidth=linewidth)
+
+    ax.text(scalebar_x + length/2, scalebar_y + (y1-y0)*0.01,
+            f"{int(length):,} m", ha='center', va='bottom', fontsize=10, color='black')
+
+def choose_scale_length(width_m):
+    """Pilih panjang skala grafis otomatis"""
+    candidates = [100, 200, 500, 1000, 2000, 5000, 10000]
+    for c in candidates:
+        if width_m / c < 10:
+            return c
+    return candidates[-1]
 
 # ======================
 # === Upload PKKPR ===
@@ -187,7 +217,6 @@ else:
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Hasil Analisis Overlay")
 
-    # Gunakan UTM sesuai centroid tapak
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -273,25 +302,46 @@ if gdf_polygon is not None:
     # basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
+    # cek rasio bounding box geometri → tentukan posisi legenda
+    bounds = gdf_polygon.to_crs(epsg=3857).total_bounds
+    width = bounds[2] - bounds[0]
+    height = bounds[3] - bounds[1]
+
+    if width >= height:
+        leg_loc = "upper left"
+        leg_anchor = (1.02, 1)
+    else:
+        leg_loc = "upper center"
+        leg_anchor = (0.5, -0.05)
+
     # legenda
     legend_elements = [
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=8, label="PKKPR (Titik)"),
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
+                      linestyle="None", markersize=8, label="PKKPR (Titik)"),
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
     leg = ax.legend(
         handles=legend_elements,
         title="Legenda",
-        loc="lower left",
+        loc=leg_loc,
+        bbox_to_anchor=leg_anchor,
         fontsize=12,
         title_fontsize=14,
         frameon=True,
         facecolor="white"
     )
-    leg.get_frame().set_alpha(0.7)  # transparan biar peta tetap kelihatan
+    leg.get_frame().set_alpha(0.7)
 
     # judul peta
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=18, weight="bold")
+
+    # north arrow
+    add_north_arrow(ax, size=0.08, loc_x=0.95, loc_y=0.95)
+
+    # skala grafis otomatis
+    scale_length = choose_scale_length(width)
+    add_scale_bar(ax, length=scale_length, location=(0.1, 0.05))
 
     # hilangkan axis
     ax.set_axis_off()
