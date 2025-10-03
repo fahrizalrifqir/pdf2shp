@@ -91,17 +91,19 @@ col1, col2 = st.columns([0.7, 0.3])
 with col1:
     uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-coords = []
+coords, coords_dimohon, coords_disetujui = [], [], []
 gdf_points, gdf_polygon, gdf_tapak = None, None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        coords = []
         luas_disetujui, luas_dimohon = None, None
+
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
+                table_mode = None  # state: "disetujui", "dimohon", atau None
+
                 if text:
                     for line in text.split("\n"):
                         low = line.lower()
@@ -110,6 +112,13 @@ if uploaded_pkkpr:
                         elif re.search(r"luas\s+tanah\s+yang\s+dimohon", low) and luas_dimohon is None:
                             luas_dimohon = parse_luas(line)
 
+                        # deteksi header tabel
+                        if "tabel koordinat" in low and "disetujui" in low:
+                            table_mode = "disetujui"
+                        elif "tabel koordinat" in low and "dimohon" in low:
+                            table_mode = "dimohon"
+
+                # baca tabel
                 tables = page.extract_tables()
                 for table in tables:
                     for row in table:
@@ -118,14 +127,20 @@ if uploaded_pkkpr:
                                 lon = parse_coordinate(str(row[1]))
                                 lat = parse_coordinate(str(row[2]))
                                 if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
-                                    coords.append((lon, lat))
+                                    if table_mode == "disetujui":
+                                        coords_disetujui.append((lon, lat))
+                                    elif table_mode == "dimohon":
+                                        coords_dimohon.append((lon, lat))
                             except:
                                 continue
 
-        if luas_disetujui is not None:
+        # pilih koordinat prioritas
+        if coords_disetujui:
+            coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui
             luas_pkkpr_doc_label = "disetujui"
-        elif luas_dimohon is not None:
+        elif coords_dimohon:
+            coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
 
@@ -218,8 +233,8 @@ if gdf_polygon is not None:
         - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
         - Luas PKKPR (dokumen): {luas_doc_str}
         - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-        - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-        - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+        - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
+        - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
         """)
 
     st.markdown("---")
