@@ -156,6 +156,28 @@ if gdf_polygon is not None:
     with open(zip_pkkpr_only, "rb") as f:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
+# ======================
+# === Analisis PKKPR Sendiri (langsung muncul) ===
+# ======================
+if gdf_polygon is not None:
+    st.subheader("📊 Analisis PKKPR")
+
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
+
+    gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
+    luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+
+    st.info(f"""
+    **Analisis Luas PKKPR (Proyeksi UTM Zona {utm_zone}):**
+    - Luas PKKPR (dokumen): {luas_doc_str}
+    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    """)
+
+    st.markdown("---")
+
 # ================================
 # === Upload Tapak Proyek (SHP) ===
 # ================================
@@ -183,10 +205,10 @@ else:
     gdf_tapak = None
 
 # ======================
-# === Analisis Overlay ===
+# === Analisis Overlay (jika ada Tapak) ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
-    st.subheader("📊 Hasil Analisis Overlay")
+    st.subheader("📊 Analisis Overlay PKKPR & Tapak Proyek")
 
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
