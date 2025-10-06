@@ -159,7 +159,7 @@ if gdf_polygon is not None:
 # ======================
 # === Analisis PKKPR Sendiri (langsung muncul) ===
 # ======================
-if gdf_polygon is not None
+if gdf_polygon is not None :
 
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
@@ -363,6 +363,7 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
+
 
 
 
