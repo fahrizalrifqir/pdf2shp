@@ -107,11 +107,11 @@ if uploaded_pkkpr:
                     # deteksi judul tabel koordinat (lebih fleksibel)
                     if "koordinat" in low and "disetujui" in low:
                         table_mode = "disetujui"
-                        st.write("📑 Mode tabel koordinat: disetujui")
+                        
                         continue
                     elif "koordinat" in low and "dimohon" in low:
                         table_mode = "dimohon"
-                        st.write("📑 Mode tabel koordinat: dimohon")
+                        
                         continue
 
                     # regex koordinat (No. X Y)
@@ -136,10 +136,6 @@ if uploaded_pkkpr:
             coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
-
-        # debug info
-        st.write(f"📌 Total koordinat disetujui: {len(coords_disetujui)}")
-        st.write(f"📌 Total koordinat dimohon: {len(coords_dimohon)}")
 
         # buat geodataframe
         if coords:
@@ -361,3 +357,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
