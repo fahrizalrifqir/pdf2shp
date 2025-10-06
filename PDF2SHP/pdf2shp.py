@@ -160,7 +160,6 @@ if gdf_polygon is not None:
 # === Analisis PKKPR Sendiri (langsung muncul) ===
 # ======================
 if gdf_polygon is not None:
-    st.subheader("📊 Analisis PKKPR")
 
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
@@ -171,7 +170,7 @@ if gdf_polygon is not None:
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
-    **Analisis Luas PKKPR (Proyeksi UTM Zona {utm_zone}):**
+    *(Proyeksi UTM Zona {utm_zone}):**
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     """)
@@ -364,4 +363,5 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
+
 
