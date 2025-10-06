@@ -79,10 +79,25 @@ if uploaded_pkkpr:
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
+                # === coba baca tabel koordinat langsung ===
+                table = page.extract_table()
+                if table:
+                    for row in table:
+                        if len(row) >= 3 and row[1] and row[2]:
+                            try:
+                                lon, lat = float(row[1]), float(row[2])
+                                if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                    if table_mode == "disetujui":
+                                        coords_disetujui.append((lon, lat))
+                                    elif table_mode == "dimohon":
+                                        coords_dimohon.append((lon, lat))
+                            except:
+                                continue
+
+                # === fallback pakai teks + regex ===
                 text = page.extract_text()
                 if not text:
                     continue
-
                 for line in text.split("\n"):
                     low = line.lower().strip()
 
@@ -101,7 +116,7 @@ if uploaded_pkkpr:
                         continue
 
                     # regex cari koordinat
-                    m = re.match(r"^\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
+                    m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
                             lon, lat = float(m.group(1)), float(m.group(2))
@@ -157,10 +172,9 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
 # ======================
-# === Analisis PKKPR Sendiri (langsung muncul) ===
+# === Analisis PKKPR Sendiri ===
 # ======================
-if gdf_polygon is not None :
-
+if gdf_polygon is not None:
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -204,7 +218,7 @@ else:
     gdf_tapak = None
 
 # ======================
-# === Analisis Overlay (jika ada Tapak) ===
+# === Analisis Overlay ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Analisis Overlay PKKPR & Tapak Proyek")
@@ -279,7 +293,7 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # ======================
-# === Layout Peta PNG (Auto Size & Legend) ===
+# === Layout Peta PNG ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
@@ -292,7 +306,7 @@ if gdf_polygon is not None:
     width = xmax - xmin
     height = ymax - ymin
 
-    # tentukan orientasi otomatis
+    # orientasi otomatis
     if width > height:
         figsize = (14, 10)   # landscape
     else:
@@ -328,7 +342,7 @@ if gdf_polygon is not None:
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
-    # legenda agak diperbesar
+    # legenda
     legend_elements = [
         mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
                       linestyle="None", markersize=5, label="PKKPR (Titik)"),
@@ -363,9 +377,3 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
-
-
-
-
-
-
