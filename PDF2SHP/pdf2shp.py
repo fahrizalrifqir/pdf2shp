@@ -76,7 +76,7 @@ if uploaded_pkkpr:
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
-                # coba baca tabel langsung
+                # === coba baca tabel langsung ===
                 table = page.extract_table()
                 if table:
                     for row in table:
@@ -91,28 +91,30 @@ if uploaded_pkkpr:
                             except:
                                 continue
 
-                # fallback text
+                # === fallback text ===
                 text = page.extract_text()
                 if not text:
                     continue
                 for line in text.split("\n"):
                     low = line.lower().strip()
 
-                    # luas tanah
+                    # deteksi luas tanah
                     if "luas tanah yang disetujui" in low and luas_disetujui is None:
                         luas_disetujui = parse_luas(line)
                     elif "luas tanah yang dimohon" in low and luas_dimohon is None:
                         luas_dimohon = parse_luas(line)
 
-                    # deteksi judul tabel koordinat (lebih longgar)
+                    # deteksi judul tabel koordinat (lebih fleksibel)
                     if "koordinat" in low and "disetujui" in low:
                         table_mode = "disetujui"
+                        st.write("📑 Mode tabel koordinat: disetujui")
                         continue
                     elif "koordinat" in low and "dimohon" in low:
                         table_mode = "dimohon"
+                        st.write("📑 Mode tabel koordinat: dimohon")
                         continue
 
-                    # regex koordinat
+                    # regex koordinat (No. X Y)
                     m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
@@ -134,6 +136,10 @@ if uploaded_pkkpr:
             coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
+
+        # debug info
+        st.write(f"📌 Total koordinat disetujui: {len(coords_disetujui)}")
+        st.write(f"📌 Total koordinat dimohon: {len(coords_dimohon)}")
 
         # buat geodataframe
         if coords:
@@ -188,4 +194,170 @@ if gdf_polygon is not None:
 
     st.markdown("---")
 
-# ========== dst (overlay, preview interaktif, layout PNG) tetap sama ==========
+# ================================
+# === Upload Tapak Proyek (SHP) ===
+# ================================
+col1, col2 = st.columns([0.7, 0.3])
+with col1:
+    uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"])
+
+if uploaded_tapak:
+    try:
+        if os.path.exists("tapak_shp"):
+            shutil.rmtree("tapak_shp")
+        with zipfile.ZipFile(uploaded_tapak, "r") as z:
+            z.extractall("tapak_shp")
+        gdf_tapak = gpd.read_file("tapak_shp")
+        if gdf_tapak.crs is None:
+            gdf_tapak.set_crs(epsg=4326, inplace=True)
+        with col2:
+            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+    except Exception as e:
+        gdf_tapak = None
+        with col2:
+            st.markdown("<p style='color: red; font-weight: bold; padding-top: 3.5rem;'>❌ Gagal dibaca</p>", unsafe_allow_html=True)
+        st.error(f"Error: {e}")
+else:
+    gdf_tapak = None
+
+# ======================
+# === Analisis Overlay ===
+# ======================
+if gdf_polygon is not None and gdf_tapak is not None:
+    st.subheader("📊 Analisis Overlay PKKPR & Tapak Proyek")
+
+    centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
+
+    gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
+    gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
+
+    luas_tapak = gdf_tapak_utm.area.sum()
+    luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+    luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
+    luas_outside = luas_tapak - luas_overlap
+
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+
+    st.info(f"""
+    **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
+    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+    - Luas PKKPR (dokumen): {luas_doc_str}
+    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+    """)
+
+    st.markdown("---")
+
+# ======================
+# === Preview Interaktif ===
+# ======================
+if gdf_polygon is not None:
+    st.subheader("🌍 Preview Peta Interaktif")
+
+    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
+    tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
+
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+
+    Fullscreen(position="bottomleft").add_to(m)
+
+    folium.GeoJson(
+        gdf_polygon.to_crs(epsg=4326),
+        name="PKKPR",
+        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
+    ).add_to(m)
+
+    if gdf_tapak is not None:
+        folium.GeoJson(
+            gdf_tapak.to_crs(epsg=4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
+        ).add_to(m)
+
+    if gdf_points is not None:
+        for i, row in gdf_points.iterrows():
+            folium.CircleMarker(
+                location=[row.geometry.y, row.geometry.x],
+                radius=5,
+                color="black",
+                fill=True,
+                fill_color="orange",
+                fill_opacity=1,
+                popup=f"Titik {i+1}"
+            ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+    st_folium(m, width=900, height=600)
+
+    st.markdown("---")
+
+# ======================
+# === Layout Peta PNG ===
+# ======================
+if gdf_polygon is not None:
+    st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
+
+    out_png = "layout_peta.png"
+
+    gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+    xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+    width = xmax - xmin
+    height = ymax - ymin
+
+    if width > height:
+        figsize = (14, 10)
+    else:
+        figsize = (10, 14)
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
+
+    gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+
+    if gdf_tapak is not None:
+        gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+        gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+
+    if gdf_points is not None:
+        gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+        gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
+
+    basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_tapak is not None and gdf_tapak_3857.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
+    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
+
+    dx = width * 0.05
+    dy = height * 0.05
+    ax.set_xlim(xmin - dx, xmax + dx)
+    ax.set_ylim(ymin - dy, ymax + dy)
+
+    legend_elements = [
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
+                      linestyle="None", markersize=5, label="PKKPR (Titik)"),
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+    ]
+
+    leg = ax.legend(
+        handles=legend_elements,
+        title="Legenda",
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=8,
+        title_fontsize=9,
+        markerscale=0.8,
+        labelspacing=0.3,
+        frameon=True,
+        facecolor="white"
+    )
+    leg.get_frame().set_alpha(0.7)
+
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+    ax.set_axis_off()
+
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
+
+    st.pyplot(fig)
