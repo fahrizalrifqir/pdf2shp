@@ -170,7 +170,7 @@ if gdf_polygon is not None
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
-    *(Proyeksi UTM Zona {utm_zone}):*
+    *(Proyeksi UTM Zona {utm_zone}):**
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
     """)
@@ -363,6 +363,7 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
+
 
 
 
