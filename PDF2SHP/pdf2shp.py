@@ -228,8 +228,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-    - Luas di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas di luar PKKPR: **{luas_outside:,.2f} m²**
+    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
 
     st.markdown("---")
@@ -364,3 +364,4 @@ if gdf_polygon is not None:
 
     # tampilkan di streamlit
     st.pyplot(fig)
+
