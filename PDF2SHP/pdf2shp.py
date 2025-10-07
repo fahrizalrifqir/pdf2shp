@@ -70,13 +70,12 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        coords_disetujui, coords_dimohon = [], []
+        coords_disetujui, coords_dimohon, coords_plain = [], [], []
         luas_disetujui, luas_dimohon = None, None
         table_mode = None
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
-                # === coba baca tabel langsung ===
                 table = page.extract_table()
                 if table:
                     for row in table:
@@ -88,33 +87,29 @@ if uploaded_pkkpr:
                                         coords_disetujui.append((lon, lat))
                                     elif table_mode == "dimohon":
                                         coords_dimohon.append((lon, lat))
+                                    else:
+                                        coords_plain.append((lon, lat))
                             except:
                                 continue
 
-                # === fallback text ===
                 text = page.extract_text()
                 if not text:
                     continue
                 for line in text.split("\n"):
                     low = line.lower().strip()
 
-                    # deteksi luas tanah
                     if "luas tanah yang disetujui" in low and luas_disetujui is None:
                         luas_disetujui = parse_luas(line)
                     elif "luas tanah yang dimohon" in low and luas_dimohon is None:
                         luas_dimohon = parse_luas(line)
 
-                    # deteksi judul tabel koordinat (lebih fleksibel)
                     if "koordinat" in low and "disetujui" in low:
                         table_mode = "disetujui"
-                        
                         continue
                     elif "koordinat" in low and "dimohon" in low:
                         table_mode = "dimohon"
-                        
                         continue
 
-                    # regex koordinat (No. X Y)
                     m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
@@ -124,18 +119,24 @@ if uploaded_pkkpr:
                                     coords_disetujui.append((lon, lat))
                                 elif table_mode == "dimohon":
                                     coords_dimohon.append((lon, lat))
+                                else:
+                                    coords_plain.append((lon, lat))
                         except:
                             continue
 
-        # pilih koordinat & luas
+        # === Pilih koordinat berdasarkan hirarki ===
         if coords_disetujui:
             coords = coords_disetujui
-            luas_pkkpr_doc = luas_disetujui if luas_disetujui is not None else luas_dimohon
-            luas_pkkpr_doc_label = "disetujui" if luas_disetujui is not None else "dimohon"
+            luas_pkkpr_doc = luas_disetujui if luas_disetujui else luas_dimohon
+            luas_pkkpr_doc_label = "disetujui"
         elif coords_dimohon:
             coords = coords_dimohon
             luas_pkkpr_doc = luas_dimohon
             luas_pkkpr_doc_label = "dimohon"
+        elif coords_plain:
+            coords = coords_plain
+            luas_pkkpr_doc = None
+            luas_pkkpr_doc_label = "tanpa judul"
 
         # buat geodataframe
         if coords:
@@ -151,7 +152,7 @@ if uploaded_pkkpr:
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
         with col2:
-            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik</p>", unsafe_allow_html=True)
+            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({luas_pkkpr_doc_label})</p>", unsafe_allow_html=True)
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -357,4 +358,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
