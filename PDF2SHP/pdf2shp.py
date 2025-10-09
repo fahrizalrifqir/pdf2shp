@@ -46,43 +46,34 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 
-def parse_luas(line):
+def parse_luas_from_text(text):
     """
-    Ekstraksi nilai luas dari teks PDF, mendukung berbagai format:
-    - 1.548.038,08
-    - 1,548,038.08
-    - 1548038.08
-    - dan varian lainnya
+    Ekstraksi luas dari seluruh teks PDF (lebih andal untuk OSS).
     """
-    if not line:
-        return None
+    text_clean = re.sub(r"\s+", " ", text.lower())
+    m = re.search(r"luas tanah yang (disetujui|dimohon)\s*[:\-]?\s*([\d\.\,]+)", text_clean)
+    if not m:
+        return None, None
+    label = m.group(1)
+    num_str = m.group(2)
 
-    # Ambil bagian angka
-    match = re.search(r"([\d\.\,\s]+)", line)
-    if not match:
-        return None
+    num_str = re.sub(r"[^\d\.,]", "", num_str)
+    num_str = num_str.strip()
 
-    num_str = match.group(1)
-    num_str = re.sub(r"[^\d\.,]", "", num_str).strip()
-
-    if not num_str:
-        return None
-
-    # Normalisasi: tangani berbagai format ribuan & desimal
     if num_str.count(".") > 1 and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
     elif num_str.count(",") > 1 and "." in num_str:
         num_str = num_str.replace(",", "")
     elif "," in num_str and "." not in num_str:
         num_str = num_str.replace(",", ".")
-    elif "." in num_str and "," not in num_str:
-        pass
-    num_str = num_str.replace(" ", "")
+    elif num_str.count(".") > 1 and "," not in num_str:
+        parts = num_str.split(".")
+        num_str = "".join(parts[:-1]) + "." + parts[-1]
 
     try:
-        return float(num_str)
+        return float(num_str), label
     except:
-        return None
+        return None, label
 
 
 # ======================
@@ -98,88 +89,65 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
-        luas_disetujui, luas_dimohon = None, None
         table_mode = None
+        full_text = ""
+
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    full_text += "\n" + text
+
                 table = page.extract_table()
                 if table:
                     for row in table:
-                        if len(row) >= 3 and row[1] and row[2]:
+                        if len(row) >= 2:
                             try:
-                                lon, lat = float(row[1]), float(row[2])
-                                if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                x, y = float(row[0]), float(row[1])
+                                if 95 <= x <= 141 and -11 <= y <= 6:
                                     if table_mode == "disetujui":
-                                        coords_disetujui.append((lon, lat))
+                                        coords_disetujui.append((x, y))
                                     elif table_mode == "dimohon":
-                                        coords_dimohon.append((lon, lat))
+                                        coords_dimohon.append((x, y))
                                     else:
-                                        coords_plain.append((lon, lat))
+                                        coords_plain.append((x, y))
                             except:
                                 continue
 
-                text = page.extract_text()
-                if not text:
-                    continue
-                for line in text.split("\n"):
-                    low = line.lower().strip()
-                    if "luas tanah yang disetujui" in low and luas_disetujui is None:
-                        luas_disetujui = parse_luas(line)
-                    elif "luas tanah yang dimohon" in low and luas_dimohon is None:
-                        luas_dimohon = parse_luas(line)
+                if text:
+                    for line in text.split("\n"):
+                        low = line.lower().strip()
+                        if "koordinat" in low and "disetujui" in low:
+                            table_mode = "disetujui"
+                        elif "koordinat" in low and "dimohon" in low:
+                            table_mode = "dimohon"
 
-                    if "koordinat" in low and "disetujui" in low:
-                        table_mode = "disetujui"
-                        continue
-                    elif "koordinat" in low and "dimohon" in low:
-                        table_mode = "dimohon"
-                        continue
+        # Ambil luas dari seluruh teks
+        luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-                    m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
-                    if m:
-                        try:
-                            lon, lat = float(m.group(1)), float(m.group(2))
-                            if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                if table_mode == "disetujui":
-                                    coords_disetujui.append((lon, lat))
-                                elif table_mode == "dimohon":
-                                    coords_dimohon.append((lon, lat))
-                                else:
-                                    coords_plain.append((lon, lat))
-                        except:
-                            continue
-
-        # Pilih koordinat sesuai hirarki
+        # Pilih koordinat terbaik
         if coords_disetujui:
             coords = coords_disetujui
-            luas_pkkpr_doc = luas_disetujui if luas_disetujui else luas_dimohon
-            luas_pkkpr_doc_label = "disetujui"
         elif coords_dimohon:
             coords = coords_dimohon
-            luas_pkkpr_doc = luas_dimohon
-            luas_pkkpr_doc_label = "dimohon"
         elif coords_plain:
             coords = coords_plain
-            luas_pkkpr_doc = None
-            luas_pkkpr_doc_label = "tanpa judul"
 
-        # Buat geodataframe
         if coords:
+            coords = [(float(x), float(y)) for x, y in coords]
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            poly = Polygon(coords)
+            gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in coords],
                 crs="EPSG:4326"
             )
-            if len(coords) > 2:
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
-                poly = Polygon(coords)
-                gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
         with col2:
-            st.markdown(
-                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({luas_pkkpr_doc_label})</p>",
-                unsafe_allow_html=True)
+            label = luas_pkkpr_doc_label or "tidak ditemukan"
+            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({label})</p>", unsafe_allow_html=True)
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -210,7 +178,7 @@ if gdf_polygon is not None:
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})".replace(",", "_").replace(".", ",").replace("_", ".") if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
@@ -257,7 +225,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})".replace(",", "_").replace(".", ",").replace("_", ".") if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek :**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
@@ -269,16 +237,15 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.markdown("---")
 
 # ======================
-# === Preview Interaktif (4 basemap, collapsed) ===
+# === Preview Peta Interaktif (4 basemap) ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
-
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
     Fullscreen(position="bottomleft").add_to(m)
 
-    # 4 basemap
+    # Tambahkan 4 basemap utama
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
     folium.TileLayer("CartoDB.Voyager", name="CartoDB Voyager").add_to(m)
@@ -295,7 +262,7 @@ if gdf_polygon is not None:
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
-    if gdf_tapak is not None:
+    if 'gdf_tapak' in locals() and gdf_tapak is not None:
         folium.GeoJson(
             gdf_tapak.to_crs(epsg=4326),
             name="Tapak Proyek",
@@ -333,7 +300,7 @@ if gdf_polygon is not None:
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
-    if gdf_tapak is not None:
+    if 'gdf_tapak' in locals() and gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
 
@@ -341,8 +308,7 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    basemap_source = ctx.providers.Esri.WorldImagery
-    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
     dx, dy = width * 0.05, height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
