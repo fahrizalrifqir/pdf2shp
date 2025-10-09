@@ -40,6 +40,10 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas_from_text(text):
+    """
+    Ekstrak luas tanah dari seluruh isi PDF.
+    Menangani format Indonesia (1.548.038,08).
+    """
     text_clean = re.sub(r"\s+", " ", text.lower())
     m = re.search(r"luas tanah yang (disetujui|dimohon)\s*[:\-]?\s*([\d\.\,]+)", text_clean)
     if not m:
@@ -72,59 +76,70 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
-        table_mode, full_text = None, ""
+        blok_aktif = None
+        full_text = ""
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
-                # --- Ambil dari tabel ---
-                tables = page.extract_tables()
-                if tables:
-                    for tb in tables:
-                        for row in tb:
-                            if not row: continue
-                            row_clean = [str(x).strip() for x in row if x]
-                            nums = re.findall(r"[-+]?\d+\.\d+", " ".join(row_clean))
-                            if len(nums) >= 2:
-                                lon, lat = float(nums[0]), float(nums[1])
-                                if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                    if table_mode == "disetujui":
-                                        coords_disetujui.append((lon, lat))
-                                    elif table_mode == "dimohon":
-                                        coords_dimohon.append((lon, lat))
-                                    else:
-                                        coords_plain.append((lon, lat))
-
-                # --- Ambil dari teks langsung ---
+                # Deteksi blok koordinat aktif
                 for line in text.split("\n"):
-                    low = line.lower().strip()
+                    low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
-                        table_mode = "disetujui"
+                        blok_aktif = "disetujui"
                     elif "koordinat" in low and "dimohon" in low:
-                        table_mode = "dimohon"
+                        blok_aktif = "dimohon"
 
-                    m = re.findall(r"[-+]?\d+\.\d+", low)
+                    # Tangkap angka dalam baris
+                    m = re.findall(r"[-+]?\d+\.\d+", line)
                     if len(m) >= 2:
                         lon, lat = float(m[0]), float(m[1])
                         if 95 <= lon <= 141 and -11 <= lat <= 6:
-                            if table_mode == "disetujui":
+                            if blok_aktif == "disetujui":
                                 coords_disetujui.append((lon, lat))
-                            elif table_mode == "dimohon":
+                            elif blok_aktif == "dimohon":
                                 coords_dimohon.append((lon, lat))
                             else:
                                 coords_plain.append((lon, lat))
 
+                # Tangkap tabel koordinat jika ada
+                tables = page.extract_tables()
+                if tables:
+                    for tb in tables:
+                        for row in tb:
+                            if not row:
+                                continue
+                            nums = re.findall(r"[-+]?\d+\.\d+", " ".join([str(x) for x in row if x]))
+                            if len(nums) >= 2:
+                                lon, lat = float(nums[0]), float(nums[1])
+                                if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                    if blok_aktif == "disetujui":
+                                        coords_disetujui.append((lon, lat))
+                                    elif blok_aktif == "dimohon":
+                                        coords_dimohon.append((lon, lat))
+                                    else:
+                                        coords_plain.append((lon, lat))
+
+        # Ambil luas dari teks
         luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
+        # Pilih koordinat sesuai prioritas
         if coords_disetujui:
             coords = coords_disetujui
+            luas_pkkpr_doc_label = "disetujui"
         elif coords_dimohon:
             coords = coords_dimohon
+            luas_pkkpr_doc_label = "dimohon"
         elif coords_plain:
             coords = coords_plain
+            luas_pkkpr_doc_label = "tanpa judul"
 
+        # Hapus duplikat titik
+        coords = list(dict.fromkeys(coords))
+
+        # Bangun GeoDataFrame
         if coords:
             if coords[0] != coords[-1]:
                 coords.append(coords[0])
@@ -137,7 +152,10 @@ if uploaded_pkkpr:
 
         with col2:
             label = luas_pkkpr_doc_label or "tidak ditemukan"
-            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({label})</p>", unsafe_allow_html=True)
+            st.markdown(
+                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({label})</p>",
+                unsafe_allow_html=True,
+            )
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -154,7 +172,9 @@ if uploaded_pkkpr:
 if gdf_polygon is not None:
     zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
     with open(zip_pkkpr_only, "rb") as f:
-        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
+        st.download_button(
+            "⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip"
+        )
 
 # ======================
 # === Analisis PKKPR ===
@@ -189,7 +209,10 @@ if uploaded_tapak:
         if gdf_tapak.crs is None:
             gdf_tapak.set_crs(4326, inplace=True)
         with col2:
-            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+            st.markdown(
+                "<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>",
+                unsafe_allow_html=True,
+            )
     except Exception as e:
         gdf_tapak = None
         st.error(str(e))
@@ -197,7 +220,7 @@ else:
     gdf_tapak = None
 
 # ======================
-# === Overlay Analisis ===
+# === Analisis Overlay ===
 # ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("📊 Analisis Overlay PKKPR & Tapak Proyek")
@@ -229,7 +252,7 @@ if gdf_polygon is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
     Fullscreen(position="bottomleft").add_to(m)
 
-    # Basemap 4 jenis
+    # Tambahkan 4 basemap utama
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
     folium.TileLayer("CartoDB.Positron", name="CartoDB Positron").add_to(m)
@@ -240,17 +263,30 @@ if gdf_polygon is not None:
         subdomains=["mt0", "mt1", "mt2", "mt3"]
     ).add_to(m)
 
-    folium.GeoJson(gdf_polygon.to_crs(4326),
-                   name="PKKPR",
-                   style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
+    folium.GeoJson(
+        gdf_polygon.to_crs(4326),
+        name="PKKPR",
+        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0},
+    ).add_to(m)
+
     if gdf_tapak is not None:
-        folium.GeoJson(gdf_tapak.to_crs(4326),
-                       name="Tapak Proyek",
-                       style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+        folium.GeoJson(
+            gdf_tapak.to_crs(4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4},
+        ).add_to(m)
+
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
-            folium.CircleMarker([row.geometry.y, row.geometry.x],
-                                radius=5, color="black", fill_color="orange", fill=True).add_to(m)
+            folium.CircleMarker(
+                [row.geometry.y, row.geometry.x],
+                radius=5,
+                color="black",
+                fill_color="orange",
+                fill=True,
+                popup=f"Titik {i+1}",
+            ).add_to(m)
+
     folium.LayerControl(collapsed=True, position="topright").add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
