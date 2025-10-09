@@ -118,9 +118,9 @@ if uploaded_pkkpr:
                     continue
                 for line in text.split("\n"):
                     low = line.lower().strip()
-                    if "luas tanah yang disetujui" in low and luas_disetujui is None:
+                    if re.search(r"luas\s*tanah.*disetujui", low) and luas_disetujui is None:
                         luas_disetujui = parse_luas(line)
-                    elif "luas tanah yang dimohon" in low and luas_dimohon is None:
+                    elif re.search(r"luas\s*tanah.*dimohon", low) and luas_dimohon is None:
                         luas_dimohon = parse_luas(line)
 
                     if "koordinat" in low and "disetujui" in low:
@@ -363,3 +363,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
