@@ -46,19 +46,38 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 
-def parse_luas(line):
-    match = re.search(r"([\d\.\,]+)", line)
-    if not match:
-        return None
-    num_str = match.group(1)
-    if "." in num_str and "," in num_str:
-        num_str = num_str.replace(".", "").replace(",", ".")
-    elif "," in num_str:
-        num_str = num_str.replace(",", ".")
-    try:
-        return float(num_str)
-    except:
-        return None
+    def parse_luas(line):
+        """
+        Ekstraksi nilai luas dari teks dengan format Indonesia (mis. '1.548.038,08 M²').
+        Menangani spasi acak, titik ribuan, dan koma desimal.
+        """
+        if not line:
+            return None
+    
+        # Ambil bagian angka + tanda pemisah desimal
+        match = re.search(r"([\d\.\,\s]+)", line)
+        if not match:
+            return None
+    
+        num_str = match.group(1)
+        # Bersihkan spasi dan huruf lain
+        num_str = re.sub(r"[^\d\.,]", "", num_str)
+        num_str = num_str.replace(" ", "")
+    
+        # Tangani format ribuan dan desimal ala Indonesia
+        if "." in num_str and "," in num_str:
+            num_str = num_str.replace(".", "").replace(",", ".")
+        elif "," in num_str and "." not in num_str:
+            num_str = num_str.replace(",", ".")
+        elif num_str.count(".") > 1:
+            # Jika terlalu banyak titik, hapus semua kecuali terakhir (anggap ribuan)
+            parts = num_str.split(".")
+            num_str = "".join(parts[:-1]) + "." + parts[-1]
+    
+        try:
+            return float(num_str)
+        except:
+            return None
 
 # ======================
 # === Upload PKKPR ===
@@ -343,6 +362,7 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
 
