@@ -179,11 +179,17 @@ if gdf_polygon is not None:
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+
+    # Tambahan: luas berdasarkan proyeksi WGS 84 / Web Mercator
+    gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
+    luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
+
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     *(Proyeksi UTM Zona {utm_zone}):**
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    - Luas PKKPR (proyeksi WGS 84 / Mercator): {luas_pkkpr_mercator:,.2f} m²
     """)
     st.markdown("---")
 
