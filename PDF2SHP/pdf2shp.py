@@ -335,47 +335,69 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # ======================
-# === Layout Peta PNG ===
+# === Preview Interaktif ===
 # ======================
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
-    out_png = "layout_peta.png"
-    gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
-    xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-    width = xmax - xmin
-    height = ymax - ymin
-    figsize = (14, 10) if width > height else (10, 14)
+    st.subheader("🌍 Preview Peta Interaktif")
 
-    fig, ax = plt.subplots(figsize=figsize, dpi=150)
-    gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
+    Fullscreen(position="bottomleft").add_to(m)
+
+    # Tambahkan empat pilihan basemap resmi dengan atribut sumber
+    folium.TileLayer(
+        tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        attr="© OpenStreetMap contributors",
+        name="OpenStreetMap"
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles © Esri",
+        name="Esri World Imagery"
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png",
+        attr="© CartoDB",
+        name="CartoDB Positron"
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.png",
+        attr="Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap.",
+        name="Stamen Terrain"
+    ).add_to(m)
+
+    # Tambahkan layer polygon PKKPR dan Tapak
+    folium.GeoJson(
+        gdf_polygon.to_crs(epsg=4326),
+        name="PKKPR",
+        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
+    ).add_to(m)
 
     if 'gdf_tapak' in locals() and gdf_tapak is not None:
-        gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
-        gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+        folium.GeoJson(
+            gdf_tapak.to_crs(epsg=4326),
+            name="Tapak Proyek",
+            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
+        ).add_to(m)
 
     if gdf_points is not None:
-        gdf_points_3857 = gdf_points.to_crs(epsg=3857)
-        gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
+        for i, row in gdf_points.iterrows():
+            folium.CircleMarker(
+                location=[row.geometry.y, row.geometry.x],
+                radius=5,
+                color="black",
+                fill=True,
+                fill_color="orange",
+                fill_opacity=1,
+                popup=f"Titik {i+1}"
+            ).add_to(m)
 
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
-    dx, dy = width * 0.05, height * 0.05
-    ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(ymin - dy, ymax + dy)
+    # Layer control collapsible di pojok kanan atas
+    folium.LayerControl(collapsed=True, position="topright").add_to(m)
 
-    legend_elements = [
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
-        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-    ]
-    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", bbox_to_anchor=(0.98, 0.98),
-                    fontsize=8, title_fontsize=9, markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
-    leg.get_frame().set_alpha(0.7)
+    st_folium(m, width=900, height=600)
+    st.markdown("---")
 
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
-    ax.set_axis_off()
-    plt.savefig(out_png, dpi=300, bbox_inches="tight")
-
-    with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
-
-    st.pyplot(fig)
