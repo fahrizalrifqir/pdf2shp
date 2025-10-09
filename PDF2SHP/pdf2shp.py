@@ -48,26 +48,36 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 def parse_luas(line):
     """
-    Ekstraksi nilai luas dari teks dengan format Indonesia (mis. '1.548.038,08 M²').
-    Menangani spasi acak, titik ribuan, dan koma desimal.
+    Ekstraksi nilai luas dari teks PDF, mendukung berbagai format:
+    - 1.548.038,08
+    - 1,548,038.08
+    - 1548038.08
+    - dan varian lainnya
     """
     if not line:
         return None
 
+    # Ambil bagian angka
     match = re.search(r"([\d\.\,\s]+)", line)
     if not match:
         return None
 
     num_str = match.group(1)
-    num_str = re.sub(r"[^\d\.,]", "", num_str).replace(" ", "")
+    num_str = re.sub(r"[^\d\.,]", "", num_str).strip()
 
-    if "." in num_str and "," in num_str:
+    if not num_str:
+        return None
+
+    # Normalisasi: tangani berbagai format ribuan & desimal
+    if num_str.count(".") > 1 and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
+    elif num_str.count(",") > 1 and "." in num_str:
+        num_str = num_str.replace(",", "")
     elif "," in num_str and "." not in num_str:
         num_str = num_str.replace(",", ".")
-    elif num_str.count(".") > 1:
-        parts = num_str.split(".")
-        num_str = "".join(parts[:-1]) + "." + parts[-1]
+    elif "." in num_str and "," not in num_str:
+        pass
+    num_str = num_str.replace(" ", "")
 
     try:
         return float(num_str)
@@ -139,6 +149,7 @@ if uploaded_pkkpr:
                         except:
                             continue
 
+        # Pilih koordinat sesuai hirarki
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui if luas_disetujui else luas_dimohon
@@ -149,8 +160,10 @@ if uploaded_pkkpr:
             luas_pkkpr_doc_label = "dimohon"
         elif coords_plain:
             coords = coords_plain
+            luas_pkkpr_doc = None
             luas_pkkpr_doc_label = "tanpa judul"
 
+        # Buat geodataframe
         if coords:
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
@@ -164,7 +177,9 @@ if uploaded_pkkpr:
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
         with col2:
-            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({luas_pkkpr_doc_label})</p>", unsafe_allow_html=True)
+            st.markdown(
+                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({luas_pkkpr_doc_label})</p>",
+                unsafe_allow_html=True)
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -191,9 +206,11 @@ if gdf_polygon is not None:
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})".replace(",", "_").replace(".", ",").replace("_", ".") if luas_pkkpr_doc else "-"
     st.info(f"""
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
@@ -240,7 +257,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})".replace(",", "_").replace(".", ",").replace("_", ".") if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek :**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
@@ -261,7 +278,7 @@ if gdf_polygon is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
     Fullscreen(position="bottomleft").add_to(m)
 
-    # Tambahkan 4 basemap utama
+    # 4 basemap
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
     folium.TileLayer("CartoDB.Voyager", name="CartoDB Voyager").add_to(m)
@@ -278,7 +295,7 @@ if gdf_polygon is not None:
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
-    if 'gdf_tapak' in locals() and gdf_tapak is not None:
+    if gdf_tapak is not None:
         folium.GeoJson(
             gdf_tapak.to_crs(epsg=4326),
             name="Tapak Proyek",
@@ -297,7 +314,6 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
-    # Control basemap disembunyikan dulu (collapsed)
     folium.LayerControl(collapsed=True, position="topright").add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
@@ -317,7 +333,7 @@ if gdf_polygon is not None:
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
-    if 'gdf_tapak' in locals() and gdf_tapak is not None:
+    if gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
 
@@ -325,7 +341,9 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+    basemap_source = ctx.providers.Esri.WorldImagery
+    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
+
     dx, dy = width * 0.05, height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
@@ -335,7 +353,10 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", fontsize=8)
+    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", bbox_to_anchor=(0.98, 0.98),
+                    fontsize=8, title_fontsize=9, markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
+    leg.get_frame().set_alpha(0.7)
+
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
     ax.set_axis_off()
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
@@ -344,4 +365,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
