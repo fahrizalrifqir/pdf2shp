@@ -344,4 +344,34 @@ if gdf_polygon is not None:
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
     ax.set_xlim(xmin - width * 0.05, xmax + width * 0.05)
     ax.set_ylim(ymin - height * 0.05, ymax + height * 0.05)
-    ax.set_title("Peta Kesesua
+    ax.set_title("Peta Kesesua    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+    ax.set_axis_off()
+
+    legend_elements = [
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
+                      linestyle="None", markersize=5, label="PKKPR (Titik)"),
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+    ]
+
+    leg = ax.legend(
+        handles=legend_elements,
+        title="Legenda",
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.98),
+        fontsize=8,
+        title_fontsize=9,
+        markerscale=0.8,
+        labelspacing=0.3,
+        frameon=True,
+        facecolor="white"
+    )
+    leg.get_frame().set_alpha(0.7)
+
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
+
+    st.pyplot(fig)
+
+
