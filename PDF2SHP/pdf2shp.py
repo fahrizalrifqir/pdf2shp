@@ -218,7 +218,6 @@ if gdf_polygon is not None:
     - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
     - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_indo(luas_pkkpr_mercator)} m²
     """)
-    st.markdown("---")
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -356,4 +355,5 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
