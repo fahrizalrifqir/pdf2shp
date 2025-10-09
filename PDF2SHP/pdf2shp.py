@@ -47,10 +47,7 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 
 def parse_luas_from_text(text):
-    """
-    Cari dan ubah nilai luas dengan format Indonesia.
-    Gunakan '.' untuk ribuan dan ',' untuk desimal.
-    """
+    """Cari dan ubah nilai luas dengan format Indonesia"""
     text_clean = re.sub(r"\s+", " ", (text or "").lower())
     m = re.search(r"luas\s*tanah\s*yang\s*(disetujui|dimohon)\s*[:\-]?\s*([\d\.,]+)", text_clean)
     if not m:
@@ -58,14 +55,10 @@ def parse_luas_from_text(text):
     label = m.group(1)
     num_str = m.group(2)
 
-    # Normalisasi angka ala Indonesia
-    num_str = num_str.strip()
     num_str = re.sub(r"[^\d\.,]", "", num_str)
     if "." in num_str and "," in num_str:
-        # format like 1.548.038,08 -> remove dots, make comma decimal
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str and "." not in num_str:
-        # format like 14011,50 -> change comma to dot for float parsing
         num_str = num_str.replace(",", ".")
     elif num_str.count(".") > 1:
         parts = num_str.split(".")
@@ -78,7 +71,7 @@ def parse_luas_from_text(text):
 
 
 def format_angka_id(value):
-    """Format angka ke gaya Indonesia: titik ribuan, koma desimal"""
+    """Format angka gaya Indonesia"""
     try:
         return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
@@ -106,7 +99,6 @@ if uploaded_pkkpr:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
-                # deteksi blok aktif berdasarkan kata kunci pada baris
                 for line in text.split("\n"):
                     low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
@@ -114,7 +106,6 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    # tangkap pasangan angka di baris (float dengan titik)
                     mline = re.findall(r"[-+]?\d+\.\d+", line)
                     if len(mline) >= 2:
                         try:
@@ -129,14 +120,13 @@ if uploaded_pkkpr:
                         except:
                             pass
 
-                # baca tabel (jika ada)
                 tables = page.extract_tables()
                 if tables:
                     for tb in tables:
                         for row in tb:
                             if not row:
                                 continue
-                            row_join = " ".join([str(x) for x in row if x is not None])
+                            row_join = " ".join([str(x) for x in row if x])
                             nums = re.findall(r"[-+]?\d+\.\d+", row_join)
                             if len(nums) >= 2:
                                 try:
@@ -151,10 +141,8 @@ if uploaded_pkkpr:
                                 except:
                                     pass
 
-        # Ambil luas dokumen (jika ada)
         luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-        # Pilih prioritas koordinat: disetujui > dimohon > plain
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc_label = luas_pkkpr_doc_label or "disetujui"
@@ -165,27 +153,17 @@ if uploaded_pkkpr:
             coords = coords_plain
             luas_pkkpr_doc_label = luas_pkkpr_doc_label or "tanpa judul"
 
-        # Hilangkan duplikasi sekaligus mempertahankan urutan
         coords = list(dict.fromkeys(coords))
 
-        # Jika format OSS adalah (lat, lon) per baris, kita perlu membalik jadi (lon, lat).
-        # Heuristik: jika koordinat tampak Lintang di kisaran -11..6 dan Bujur 95..141,
-        # dan urutan yang kita baca tampak (lon, lat) benar, kita biarkan. Jika tidak, coba flip.
         flipped_coords = []
         if coords:
-            # Periksa apakah nilai pertama lebih mungkin lat atau lon
             first_x, first_y = coords[0]
-            # if first_x is within lat range (-11..6) and first_y within lon range (95..141) then flip
             if -11 <= first_x <= 6 and 95 <= first_y <= 141:
-                # coords are (lat, lon) -> flip them
                 flipped_coords = [(y, x) for x, y in coords]
             else:
-                # assume coords already (lon, lat)
                 flipped_coords = [(x, y) for x, y in coords]
 
-        # Tutup dan buat geodataframe jika ada koordinat
         if flipped_coords:
-            # pastikan unik lagi dan urutan tetap
             flipped_coords = list(dict.fromkeys(flipped_coords))
             if flipped_coords[0] != flipped_coords[-1]:
                 flipped_coords.append(flipped_coords[0])
@@ -196,8 +174,6 @@ if uploaded_pkkpr:
                 crs="EPSG:4326"
             )
             gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
-        else:
-            gdf_points, gdf_polygon = None, None
 
         with col2:
             label_display = luas_pkkpr_doc_label or "tidak ditemukan"
@@ -300,51 +276,6 @@ if gdf_polygon is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
     Fullscreen(position="bottomleft").add_to(m)
 
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
-    folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
-    folium.TileLayer("CartoDB.Positron", name="CartoDB Positron").add_to(m)
-    folium.TileLayer("Stamen.Terrain", name="Stamen Terrain").add_to(m)
-
-    folium.GeoJson(
-        gdf_polygon.to_crs(epsg=4326),
-        name="PKKPR",
-        style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
-    ).add_to(m)
-
-    if 'gdf_tapak' in locals() and gdf_tapak is not None:
-        folium.GeoJson(
-            gdf_tapak.to_crs(epsg=4326),
-            name="Tapak Proyek",
-            style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
-        ).add_to(m)
-
-    if gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker(
-                location=[row.geometry.y, row.geometry.x],
-                radius=5,
-                color="black",
-                fill=True,
-                fill_color="orange",
-                fill_opacity=1,
-                popup=f"Titik {i+1}"
-            ).add_to(m)
-
-    folium.LayerControl(collapsed=True, position="topright").add_to(m)
-    st_folium(m, width=900, height=600)
-    st.markdown("---")
-
-# ======================
-# === Preview Interaktif ===
-# ======================
-if gdf_polygon is not None:
-    st.subheader("🌍 Preview Peta Interaktif")
-
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
-    Fullscreen(position="bottomleft").add_to(m)
-
-    # Tambahkan empat pilihan basemap resmi dengan atribut sumber
     folium.TileLayer(
         tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
         attr="© OpenStreetMap contributors",
@@ -365,11 +296,10 @@ if gdf_polygon is not None:
 
     folium.TileLayer(
         tiles="https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.png",
-        attr="Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap.",
+        attr="Map tiles © Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors",
         name="Stamen Terrain"
     ).add_to(m)
 
-    # Tambahkan layer polygon PKKPR dan Tapak
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
         name="PKKPR",
@@ -395,9 +325,52 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
-    # Layer control collapsible di pojok kanan atas
     folium.LayerControl(collapsed=True, position="topright").add_to(m)
-
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
+# ======================
+# === Layout Peta PNG ===
+# ======================
+if gdf_polygon is not None:
+    st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
+    out_png = "layout_peta.png"
+    gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+    xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+    width = xmax - xmin
+    height = ymax - ymin
+    figsize = (14, 10) if width > height else (10, 14)
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
+    gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
+
+    if 'gdf_tapak' in locals() and gdf_tapak is not None:
+        gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+        gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
+
+    if gdf_points is not None:
+        gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+        gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
+
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
+    dx, dy = width * 0.05, height * 0.05
+    ax.set_xlim(xmin - dx, xmax + dx)
+    ax.set_ylim(ymin - dy, ymax + dy)
+
+    legend_elements = [
+        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
+        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+    ]
+    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right",
+                    bbox_to_anchor=(0.98, 0.98), fontsize=8, title_fontsize=9,
+                    markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
+    leg.get_frame().set_alpha(0.7)
+    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+    ax.set_axis_off()
+    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+
+    with open(out_png, "rb") as f:
+        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
+
+    st.pyplot(fig)
