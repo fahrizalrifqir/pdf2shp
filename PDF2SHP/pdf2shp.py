@@ -218,6 +218,7 @@ if gdf_polygon is not None:
     - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
     - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_indo(luas_pkkpr_mercator)} m²
     """)
+    st.markdown("---")
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -264,8 +265,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
     - Total Luas Tapak Proyek: {format_indo(luas_tapak)} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
-    - Luas Tapak Proyek di dalam PKKPR (UTM): **{format_indo(luas_overlap)} m²**
-    - Luas Tapak Proyek di luar PKKPR (UTM): **{format_indo(luas_outside)} m²**
+    - Luas Tapak Proyek di dalam PKKPR: **{format_indo(luas_overlap)} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{format_indo(luas_outside)} m²**
     """)
     st.markdown("---")
 
@@ -274,18 +275,23 @@ if gdf_polygon is not None and gdf_tapak is not None:
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
-    tile_choice = st.selectbox("Pilih Basemap:", ["Esri World Imagery", "OpenStreetMap"])
-    tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
+
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
     Fullscreen(position="bottomleft").add_to(m)
 
+    # Tambahkan basemap pilihan di LayerControl
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
+    folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
+
+    # PKKPR Polygon
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
         name="PKKPR",
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
+    # Tapak Proyek
     if 'gdf_tapak' in locals() and gdf_tapak is not None:
         folium.GeoJson(
             gdf_tapak.to_crs(epsg=4326),
@@ -293,6 +299,7 @@ if gdf_polygon is not None:
             style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
         ).add_to(m)
 
+    # Titik koordinat
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
@@ -305,7 +312,7 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
-    folium.LayerControl().add_to(m)
+    folium.LayerControl(collapsed=False, position="topright").add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
@@ -354,7 +361,4 @@ if gdf_polygon is not None:
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
-    st.pyplot(fig)
-
-
-
+    st.pyplot
