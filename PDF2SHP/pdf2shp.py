@@ -295,7 +295,7 @@ if gdf_polygon is not None:
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
-    if gdf_tapak is not None:
+    if 'gdf_tapak' in locals() and gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
 
@@ -303,7 +303,7 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_tapak is not None and gdf_tapak_3857.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
+    basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_polygon.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
     ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
 
     dx = width * 0.05
@@ -338,5 +338,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-```
-
