@@ -265,8 +265,12 @@ if gdf_polygon is not None:
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
     folium.TileLayer("CartoDB.Voyager", name="CartoDB Voyager").add_to(m)
-    folium.TileLayer("Google Satellite", name="Google Satellite", tiles="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-                     attr="Google", subdomains=["mt0", "mt1", "mt2", "mt3"]).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        name="Google Satellite",
+        attr="Google",
+        subdomains=["mt0", "mt1", "mt2", "mt3"]
+    ).add_to(m)
 
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
@@ -340,3 +344,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
