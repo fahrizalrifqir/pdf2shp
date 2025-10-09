@@ -47,18 +47,14 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 
 def parse_luas(line):
-    """
-    Ekstraksi nilai luas dari teks dengan format Indonesia (mis. '1.548.038,08 M²').
-    Menangani spasi acak, titik ribuan, dan koma desimal.
-    """
+    """Konversi teks luas menjadi float"""
     if not line:
         return None
     match = re.search(r"([\d\.\,\s]+)", line)
     if not match:
         return None
     num_str = match.group(1)
-    num_str = re.sub(r"[^\d\.,]", "", num_str)
-    num_str = num_str.replace(" ", "")
+    num_str = re.sub(r"[^\d\.,]", "", num_str).replace(" ", "")
     if "." in num_str and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str and "." not in num_str:
@@ -70,6 +66,16 @@ def parse_luas(line):
         return float(num_str)
     except:
         return None
+
+
+def format_indo(num):
+    """Format angka float ke gaya Indonesia: 1.548.038,08"""
+    if num is None:
+        return "-"
+    try:
+        return f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return str(num)
 
 
 # ======================
@@ -206,11 +212,11 @@ if gdf_polygon is not None:
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{format_indo(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
-    - Luas PKKPR (proyeksi WGS 84 / Mercator): {luas_pkkpr_mercator:,.2f} m²
+    - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
+    - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_indo(luas_pkkpr_mercator)} m²
     """)
     st.markdown("---")
 
@@ -253,14 +259,14 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{format_indo(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek :**
-    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+    - Total Luas Tapak Proyek: {format_indo(luas_tapak)} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
-    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+    - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
+    - Luas Tapak Proyek di dalam PKKPR: **{format_indo(luas_overlap)} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{format_indo(luas_outside)} m²**
     """)
     st.markdown("---")
 
@@ -312,8 +318,7 @@ if gdf_polygon is not None:
     out_png = "layout_peta.png"
     gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-    width = xmax - xmin
-    height = ymax - ymin
+    width, height = xmax - xmin, ymax - ymin
     figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
