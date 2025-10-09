@@ -25,7 +25,64 @@ st.set_page_config(page_title="PKKPR → SHP + Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 
 # ======================
-# === Fungsi Helper ===
+# === Helper Formatting & Fungsi ===
+# ======================
+
+def fmt_number_id(num, decimals=2):
+    """
+    Format number memakai gaya Indonesia:
+    - ribuan: '.'  (dot)
+    - desimal: ',' (comma)
+    """
+    try:
+        s = f"{num:,.{decimals}f}"  # default: 1,234,567.89
+        # swap to Indonesian: 1.234.567,89
+        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        return s
+    except Exception:
+        return str(num)
+
+def format_area_dynamic(value_m2):
+    """
+    Ambil nilai area dalam m² (value_m2) lalu kembalikan (display_value_str, unit_str)
+    - Jika >= 10000 m² -> tampilkan dalam Ha (value_m2 / 10000) dengan 2 desimal
+    - Jika < 10000 m² -> tampilkan dalam m² dengan 2 desimal
+    """
+    if value_m2 is None:
+        return "-", ""
+    try:
+        if value_m2 >= 10000:
+            val_ha = value_m2 / 10000.0
+            return f"{fmt_number_id(val_ha, 2)}", "Ha"
+        else:
+            return f"{fmt_number_id(value_m2, 2)}", "m²"
+    except Exception:
+        return str(value_m2), "m²"
+
+def format_doc_area(value_doc, unit_doc):
+    """
+    Format untuk luas yang tercantum di dokumen:
+    - value_doc: numeric (nilai sesuai dokumen)
+    - unit_doc: "Ha" atau "m²" (jika None atau unknown, fallback ke m²)
+    Output: formatted string seperti '20,76 Ha' (menggunakan pemisah Indonesia)
+    """
+    if value_doc is None:
+        return "-"
+    try:
+        if unit_doc is None:
+            unit_doc = "m²"
+        # Jika unit dokumen Ha, tampilkan dengan 2 desimal
+        if unit_doc.lower() in ["ha", "hektar"]:
+            return f"{fmt_number_id(float(value_doc), 2)} Ha"
+        else:
+            # m²
+            return f"{fmt_number_id(float(value_doc), 2)} m²"
+    except Exception:
+        # fallback plain
+        return f"{value_doc} {unit_doc or ''}"
+
+# ======================
+# === Fungsi GIS & Util ===
 # ======================
 
 def get_utm_info_from_lonlat(lon, lat):
@@ -47,7 +104,6 @@ def save_shapefile(gdf, folder_name, zip_name):
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name, exist_ok=True)
-    # geopandas requires a filename ending with .shp
     shp_path = os.path.join(folder_name, "data.shp")
     gdf.to_file(shp_path, driver="ESRI Shapefile")
     zip_path = f"{zip_name}.zip"
@@ -142,7 +198,6 @@ def detect_and_transform_coords(coords):
 
     # fallback scanning (jika belum ada satu pun yang masuk)
     if best["transformed"] is None or best["score"] <= 0:
-        # coba lagi dengan scanning kombinasi (lebih agresif)
         try:
             for zone in zone_candidates:
                 for hemi in ("N", "S"):
@@ -179,7 +234,7 @@ with col1:
     uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
 coords, gdf_points, gdf_polygon = [], None, None
-luas_pkkpr_doc, luas_pkkpr_doc_label, satuan_luas = None, None, "m²"
+luas_pkkpr_doc, luas_pkkpr_doc_label, satuan_luas = None, None, None
 detected_pkkpr_zone, detected_pkkpr_hemi = None, None
 
 if uploaded_pkkpr:
@@ -282,26 +337,25 @@ if gdf_polygon is not None:
     else:
         utm_epsg, utm_zone_label = get_utm_info_from_lonlat(centroid.x, centroid.y)
 
-    # hitung luas di UTM & Mercator
+    # hitung luas di UTM & Mercator (hasil dalam m²)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
-    luas_pkkpr_utm = gdf_polygon_utm.area.sum()
-    luas_pkkpr_mercator = hitung_luas_wgs84_mercator(gdf_polygon)
+    luas_pkkpr_utm_m2 = gdf_polygon_utm.area.sum()
+    luas_pkkpr_mercator_m2 = hitung_luas_wgs84_mercator(gdf_polygon)
 
-    if satuan_luas == "Ha":
-        luas_pkkpr_utm_disp = luas_pkkpr_utm / 10000.0
-        luas_pkkpr_mercator_disp = luas_pkkpr_mercator / 10000.0
-        unit_label = "Ha"
-    else:
-        luas_pkkpr_utm_disp = luas_pkkpr_utm
-        luas_pkkpr_mercator_disp = luas_pkkpr_mercator
-        unit_label = "m²"
+    # format tampilan: dokumen sesuai satuan dokumen, hasil analisis pake logika otomatis
+    doc_str = format_doc_area(luas_pkkpr_doc, satuan_luas)
+    utm_disp_val, utm_disp_unit = format_area_dynamic(luas_pkkpr_utm_m2)
+    merc_disp_val, merc_disp_unit = format_area_dynamic(luas_pkkpr_mercator_m2)
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} {unit_label} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    # gabungkan string yang rapi
+    utm_line = f"{utm_disp_val} {utm_disp_unit}" if utm_disp_unit else "-"
+    merc_line = f"{merc_disp_val} {merc_disp_unit}" if merc_disp_unit else "-"
+
     st.info(f"""
 **Perbandingan Luas PKKPR (berdasarkan proyeksi):**
-- Luas PKKPR (dokumen): {luas_doc_str}
-- Luas PKKPR (UTM Zona {utm_zone_label}): {luas_pkkpr_utm_disp:,.2f} {unit_label}
-- Luas PKKPR (WGS 84 / Pseudo Mercator): {luas_pkkpr_mercator_disp:,.2f} {unit_label}
+- Luas PKKPR (dokumen): {doc_str} ({luas_pkkpr_doc_label})
+- Luas PKKPR (UTM Zona {utm_zone_label}): {utm_line}
+- Luas PKKPR (WGS 84 / Pseudo Mercator): {merc_line}
 """)
     st.markdown("---")
 
@@ -343,7 +397,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     try:
         gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg_tapak)
     except Exception:
-        # fallback: gunakan WGS lat/lon area calculation (less accurate)
         gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg_tapak)
 
     # gunakan PKKPR UTM yang dihitung sebelumnya (utm_epsg variable)
@@ -352,46 +405,37 @@ if gdf_polygon is not None and gdf_tapak is not None:
         utm_epsg, utm_zone_label = get_utm_info_from_lonlat(centroid.x, centroid.y)
         gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
 
-    luas_tapak = gdf_tapak_utm.area.sum()
-    luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
+    luas_tapak_m2 = gdf_tapak_utm.area.sum()
+    luas_pkkpr_hitung_m2 = gdf_polygon_utm.area.sum()
 
     try:
         inter = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection")
-        luas_overlap = inter.area.sum() if not inter.empty else 0.0
+        luas_overlap_m2 = inter.area.sum() if not inter.empty else 0.0
     except Exception:
-        # fallback: iterate & intersect manual
-        luas_overlap = 0.0
+        luas_overlap_m2 = 0.0
         for a in gdf_tapak_utm.geometry:
             for b in gdf_polygon_utm.geometry:
                 try:
                     intersec = a.intersection(b)
-                    luas_overlap += intersec.area if not intersec.is_empty else 0.0
+                    luas_overlap_m2 += intersec.area if not intersec.is_empty else 0.0
                 except Exception:
                     continue
 
-    luas_outside = luas_tapak - luas_overlap
+    luas_outside_m2 = luas_tapak_m2 - luas_overlap_m2
 
-    if satuan_luas == "Ha":
-        luas_tapak_disp = luas_tapak / 10000.0
-        luas_pkkpr_hitung_disp = luas_pkkpr_hitung / 10000.0
-        luas_overlap_disp = luas_overlap / 10000.0
-        luas_outside_disp = luas_outside / 10000.0
-        unit_label = "Ha"
-    else:
-        luas_tapak_disp = luas_tapak
-        luas_pkkpr_hitung_disp = luas_pkkpr_hitung
-        luas_overlap_disp = luas_overlap
-        luas_outside_disp = luas_outside
-        unit_label = "m²"
+    # format hasil overlay mengikuti aturan otomatis (Ha jika >=10000 m2)
+    tapak_disp_val, tapak_disp_unit = format_area_dynamic(luas_tapak_m2)
+    pkkprh_disp_val, pkkprh_disp_unit = format_area_dynamic(luas_pkkpr_hitung_m2)
+    overlap_disp_val, overlap_disp_unit = format_area_dynamic(luas_overlap_m2)
+    outside_disp_val, outside_disp_unit = format_area_dynamic(luas_outside_m2)
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} {unit_label} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
 **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone_label_tapak}):**
-- Total Luas Tapak Proyek: {luas_tapak_disp:,.2f} {unit_label}
-- Luas PKKPR (dokumen): {luas_doc_str}
-- Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung_disp:,.2f} {unit_label}
-- Luas Tapak Proyek di dalam PKKPR: **{luas_overlap_disp:,.2f} {unit_label}**
-- Luas Tapak Proyek di luar PKKPR: **{luas_outside_disp:,.2f} {unit_label}**
+- Total Luas Tapak Proyek: {tapak_disp_val} {tapak_disp_unit}
+- Luas PKKPR (dokumen): {format_doc_area(luas_pkkpr_doc, satuan_luas)} ({luas_pkkpr_doc_label})
+- Luas PKKPR (hitung dari geometri): {pkkprh_disp_val} {pkkprh_disp_unit}
+- Luas Tapak Proyek di dalam PKKPR: **{overlap_disp_val} {overlap_disp_unit}**
+- Luas Tapak Proyek di luar PKKPR: **{outside_disp_val} {outside_disp_unit}**
 """)
     st.markdown("---")
 
@@ -447,7 +491,6 @@ if gdf_polygon is not None:
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
         width, height = xmax - xmin, ymax - ymin
-        # tentukan figsize sederhana berdasarkan aspek
         if width <= 0 or height <= 0:
             figsize = (10, 8)
         else:
@@ -462,7 +505,6 @@ if gdf_polygon is not None:
 
         if gdf_points is not None:
             gdf_points_3857 = gdf_points.to_crs(epsg=3857)
-            # markersize parameter expects area; berikan ukuran tampilan
             gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
         legend_elements = [
@@ -475,13 +517,11 @@ if gdf_polygon is not None:
                         markerscale=0.8, labelspacing=0.3, frameon=True)
         leg.get_frame().set_alpha(0.7)
 
-        # tambahkan basemap jika tersedia
         try:
             ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
         except Exception:
             pass
 
-        # margin kecil
         if width > 0 and height > 0:
             ax.set_xlim(xmin - width * 0.05, xmax + width * 0.05)
             ax.set_ylim(ymin - height * 0.05, ymax + height * 0.05)
