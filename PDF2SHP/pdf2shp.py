@@ -53,27 +53,19 @@ def parse_luas(line):
     """
     if not line:
         return None
-
-    # Ambil bagian angka + tanda pemisah desimal
     match = re.search(r"([\d\.\,\s]+)", line)
     if not match:
         return None
-
     num_str = match.group(1)
-    # Bersihkan spasi dan huruf lain
     num_str = re.sub(r"[^\d\.,]", "", num_str)
     num_str = num_str.replace(" ", "")
-
-    # Tangani format ribuan dan desimal ala Indonesia
     if "." in num_str and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str and "." not in num_str:
         num_str = num_str.replace(",", ".")
     elif num_str.count(".") > 1:
-        # Jika terlalu banyak titik, hapus semua kecuali terakhir (anggap ribuan)
         parts = num_str.split(".")
         num_str = "".join(parts[:-1]) + "." + parts[-1]
-
     try:
         return float(num_str)
     except:
@@ -95,7 +87,24 @@ if uploaded_pkkpr:
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
         luas_disetujui, luas_dimohon = None, None
         table_mode = None
+
         with pdfplumber.open(uploaded_pkkpr) as pdf:
+            # === Gabungkan semua teks halaman ===
+            full_text = ""
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    full_text += "\n" + text
+
+            # === Cari luas tanah disetujui / dimohon secara global ===
+            match_disetujui = re.search(r"luas\s*tanah\s*yang\s*disetujui[^0-9]*([\d\.\,]+)", full_text, re.IGNORECASE)
+            match_dimohon = re.search(r"luas\s*tanah\s*yang\s*dimohon[^0-9]*([\d\.\,]+)", full_text, re.IGNORECASE)
+            if match_disetujui:
+                luas_disetujui = parse_luas(match_disetujui.group(1))
+            if match_dimohon:
+                luas_dimohon = parse_luas(match_dimohon.group(1))
+
+            # === Ekstraksi tabel koordinat ===
             for page in pdf.pages:
                 table = page.extract_table()
                 if table:
@@ -117,12 +126,7 @@ if uploaded_pkkpr:
                 if not text:
                     continue
                 for line in text.split("\n"):
-                    low = line.lower().strip()
-                    if re.search(r"luas\s*tanah.*disetujui", low) and luas_disetujui is None:
-                        luas_disetujui = parse_luas(line)
-                    elif re.search(r"luas\s*tanah.*dimohon", low) and luas_dimohon is None:
-                        luas_dimohon = parse_luas(line)
-
+                    low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
                         table_mode = "disetujui"
                         continue
@@ -158,7 +162,6 @@ if uploaded_pkkpr:
             luas_pkkpr_doc = None
             luas_pkkpr_doc_label = "tanpa judul"
 
-        # buat geodataframe
         if coords:
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
@@ -200,7 +203,6 @@ if gdf_polygon is not None:
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
 
-    # Tambahan: luas berdasarkan proyeksi WGS 84 / Web Mercator
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
 
@@ -253,12 +255,12 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_outside = luas_tapak - luas_overlap
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
-    **Analisis Luas Tapak Proyek :*
+    **Analisis Luas Tapak Proyek :**
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
-    - Luas Tapak Proyek UTM di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas Tapak Proyek UTM di luar PKKPR: **{luas_outside:,.2f} m²**
+    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
     st.markdown("---")
 
@@ -312,10 +314,7 @@ if gdf_polygon is not None:
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
     width = xmax - xmin
     height = ymax - ymin
-    if width > height:
-        figsize = (14, 10)
-    else:
-        figsize = (10, 14)
+    figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
@@ -331,8 +330,7 @@ if gdf_polygon is not None:
     basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_polygon.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
     ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
 
-    dx = width * 0.05
-    dy = height * 0.05
+    dx, dy = width * 0.05, height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
@@ -341,18 +339,8 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-    leg = ax.legend(
-        handles=legend_elements,
-        title="Legenda",
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.98),
-        fontsize=8,
-        title_fontsize=9,
-        markerscale=0.8,
-        labelspacing=0.3,
-        frameon=True,
-        facecolor="white"
-    )
+    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", bbox_to_anchor=(0.98, 0.98),
+                    fontsize=8, title_fontsize=9, markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
     leg.get_frame().set_alpha(0.7)
 
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
@@ -363,4 +351,3 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
-
