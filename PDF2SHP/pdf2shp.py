@@ -274,7 +274,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
-    tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
+    tile_choice = st.selectbox("Pilih Basemap:", ["Esri World Imagery", "OpenStreetMap"])
     tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
@@ -355,5 +355,6 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
