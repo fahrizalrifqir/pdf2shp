@@ -46,36 +46,66 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 def parse_luas(line):
+    """
+    Ekstrak nilai luas dan satuan sesuai dokumen (Ha atau m²)
+    """
     match = re.search(r"([\d\.\,]+)", line)
     if not match:
-        return None
+        return None, None
     num_str = match.group(1)
     if "." in num_str and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str:
         num_str = num_str.replace(",", ".")
     try:
-        return float(num_str)
+        val = float(num_str)
+        if re.search(r"\b(ha|hektar)\b", line.lower()):
+            satuan = "Ha"
+        else:
+            satuan = "m²"
+        return val, satuan
     except:
-        return None
+        return None, None
+
+def deduplicate_coords(coords, tolerance=1e-6):
+    """Hilangkan duplikasi koordinat akibat OCR ganda"""
+    unique = []
+    for lon, lat in coords:
+        is_duplicate = any(abs(lon - ulon) < tolerance and abs(lat - ulat) < tolerance for ulon, ulat in unique)
+        if not is_duplicate:
+            unique.append((lon, lat))
+    return unique
 
 def detect_and_transform_coords(coords):
-    """Deteksi otomatis apakah koordinat UTM (meter) atau geografis (derajat)."""
+    """Deteksi otomatis apakah koordinat UTM atau geografis"""
     if not coords:
         return coords
+    try:
+        lon_ok = all(95 <= float(x) <= 141 for x, y in coords)
+        lat_ok = all(-11 <= float(y) <= 6 for x, y in coords)
+        if lon_ok and lat_ok:
+            return [(float(x), float(y)) for x, y in coords]
+    except:
+        pass
+    if not all(abs(x) > 1000 and abs(y) > 1000 for x, y in coords):
+        return [(float(x), float(y)) for x, y in coords]
+
     xs, ys = zip(*coords)
-    if all(abs(x) > 1000 for x in xs) and all(abs(y) > 1000 for y in ys):
-        mean_x = sum(xs) / len(xs)
-        zone = int(mean_x / 100000) + 30
-        epsg_utm = 32700 + zone
-        transformer = Transformer.from_crs(f"EPSG:{epsg_utm}", "EPSG:4326", always_xy=True)
-        transformed = [transformer.transform(x, y) for x, y in coords]
-        return transformed
-    else:
-        return coords
+    best = {"score": -1, "transformed": None, "zone": None, "hemi": None}
+    for zone in range(40, 57):
+        for hemi in ("N", "S"):
+            epsg = 32600 + zone if hemi == "N" else 32700 + zone
+            transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+            transformed = [transformer.transform(float(x), float(y)) for x, y in coords]
+            cnt_in = sum(1 for lon, lat in transformed if 95 <= lon <= 141 and -11 <= lat <= 6)
+            if cnt_in > best["score"]:
+                best.update({"score": cnt_in, "transformed": transformed, "zone": zone, "hemi": hemi})
+    if best["score"] > 0:
+        st.info(f"Deteksi koordinat: UTM Zone {best['zone']}{best['hemi']} ({best['score']} titik valid)")
+        return [(float(lon), float(lat)) for lon, lat in best["transformed"]]
+    return [(float(x), float(y)) for x, y in coords]
 
 def hitung_luas_wgs84_mercator(gdf):
-    """Hitung luas pada proyeksi WGS 84 / Pseudo Mercator (EPSG:3857)"""
     if gdf is None or gdf.empty:
         return None
     gdf_3857 = gdf.to_crs(epsg=3857)
@@ -89,51 +119,46 @@ with col1:
     uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
 coords, gdf_points, gdf_polygon = [], None, None
-luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
+luas_pkkpr_doc, luas_pkkpr_doc_label, satuan_luas = None, None, "m²"
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        coords_disetujui, coords_dimohon, coords_plain = [], [], []
+        coords_plain = []
         luas_disetujui, luas_dimohon = None, None
-        table_mode = None
 
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 table = page.extract_table()
                 if table:
                     for row in table:
-                        if len(row) >= 3 and row[1] and row[2]:
+                        if len(row) >= 3:
                             try:
                                 x, y = float(row[1]), float(row[2])
-                                if (95 <= x <= 141 and -11 <= y <= 6) or (x > 1000 and y > 1000):
-                                    coords_plain.append((x, y))
+                                coords_plain.append((x, y))
                             except:
                                 continue
-
                 text = page.extract_text()
                 if not text:
                     continue
                 for line in text.split("\n"):
                     low = line.lower().strip()
                     if "luas tanah yang disetujui" in low and luas_disetujui is None:
-                        luas_disetujui = parse_luas(line)
+                        luas_disetujui, satuan_luas = parse_luas(line)
                     elif "luas tanah yang dimohon" in low and luas_dimohon is None:
-                        luas_dimohon = parse_luas(line)
+                        luas_dimohon, satuan_luas = parse_luas(line)
                     m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
-                            x, y = float(m.group(1)), float(m.group(2))
-                            if (95 <= x <= 141 and -11 <= y <= 6) or (x > 1000 and y > 1000):
-                                coords_plain.append((x, y))
+                            coords_plain.append((float(m.group(1)), float(m.group(2))))
                         except:
                             continue
 
-        coords = coords_plain
+        coords = deduplicate_coords(coords_plain)
+        coords = detect_and_transform_coords(coords)
         luas_pkkpr_doc = luas_disetujui or luas_dimohon
         luas_pkkpr_doc_label = "disetujui" if luas_disetujui else "dimohon" if luas_dimohon else "tidak tercantum"
 
         if coords:
-            coords = detect_and_transform_coords(coords)
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in coords],
@@ -142,8 +167,7 @@ if uploaded_pkkpr:
             if len(coords) > 2:
                 if coords[0] != coords[-1]:
                     coords.append(coords[0])
-                poly = Polygon(coords)
-                gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
 
         with col2:
             st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({luas_pkkpr_doc_label})</p>", unsafe_allow_html=True)
@@ -163,7 +187,7 @@ if uploaded_pkkpr:
 if gdf_polygon is not None:
     zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
     with open(zip_pkkpr_only, "rb") as f:
-        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
+        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
 # ======================
 # === Analisis PKKPR Sendiri ===
@@ -174,13 +198,24 @@ if gdf_polygon is not None:
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_utm = gdf_polygon_utm.area.sum()
     luas_pkkpr_mercator = hitung_luas_wgs84_mercator(gdf_polygon)
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+
+    # ikuti satuan dari dokumen
+    if satuan_luas == "Ha":
+        luas_pkkpr_utm_disp = luas_pkkpr_utm / 10000
+        luas_pkkpr_mercator_disp = luas_pkkpr_mercator / 10000
+        unit_label = "Ha"
+    else:
+        luas_pkkpr_utm_disp = luas_pkkpr_utm
+        luas_pkkpr_mercator_disp = luas_pkkpr_mercator
+        unit_label = "m²"
+
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} {unit_label} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
     **Perbandingan Luas PKKPR (berdasarkan proyeksi):**
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_utm:,.2f} m²
-    - Luas PKKPR (WGS 84 / Pseudo Mercator): {luas_pkkpr_mercator:,.2f} m²
+    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_utm_disp:,.2f} {unit_label}
+    - Luas PKKPR (WGS 84 / Pseudo Mercator): {luas_pkkpr_mercator_disp:,.2f} {unit_label}
     """)
     st.markdown("---")
 
@@ -218,24 +253,31 @@ if gdf_polygon is not None and gdf_tapak is not None:
 
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-
     gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
-
     luas_tapak = gdf_tapak_utm.area.sum()
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
 
-    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    if satuan_luas == "Ha":
+        luas_tapak /= 10000
+        luas_pkkpr_hitung /= 10000
+        luas_overlap /= 10000
+        luas_outside /= 10000
+        unit_label = "Ha"
+    else:
+        unit_label = "m²"
+
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} {unit_label} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
     **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
-    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
+    - Total Luas Tapak Proyek: {luas_tapak:,.2f} {unit_label}
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
-    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
-    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
+    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} {unit_label}
+    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} {unit_label}**
+    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} {unit_label}**
     """)
     st.markdown("---")
 
@@ -247,10 +289,8 @@ if gdf_polygon is not None:
 
     tile_choice = st.selectbox("Pilih Basemap:", ["OpenStreetMap", "Esri World Imagery"])
     tile_provider = xyz["Esri"]["WorldImagery"] if tile_choice == "Esri World Imagery" else xyz["OpenStreetMap"]["Mapnik"]
-
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=tile_provider)
-
     Fullscreen(position="bottomleft").add_to(m)
 
     folium.GeoJson(
@@ -280,52 +320,28 @@ if gdf_polygon is not None:
 
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
+    st.markdown("---")
 
 # ======================
 # === Layout Peta PNG ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) - Auto Size")
-
     out_png = "layout_peta.png"
-
     gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-    width = xmax - xmin
-    height = ymax - ymin
-
+    width, height = xmax - xmin, ymax - ymin
     figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
-
     if gdf_tapak is not None:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
-
     if gdf_points is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
-
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
-
-    dx, dy = width * 0.05, height * 0.05
-    ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(ymin - dy, ymax + dy)
-
-    legend_elements = [
-        mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
-                      linestyle="None", markersize=5, label="PKKPR (Titik)"),
-        mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
-        mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-    ]
-    ax.legend(handles=legend_elements, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9, frameon=True)
-
-    ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
-    ax.set_axis_off()
-
-    plt.savefig(out_png, dpi=300, bbox_inches="tight")
-    with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
-
-    st.pyplot(fig)
+    ax.set_xlim(xmin - width * 0.05, xmax + width * 0.05)
+    ax.set_ylim(ymin - height * 0.05, ymax + height * 0.05)
+    ax.set_title("Peta Kesesua
