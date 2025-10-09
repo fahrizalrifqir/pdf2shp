@@ -51,7 +51,7 @@ def parse_luas_from_text(text):
     Cari dan ubah nilai luas dengan format Indonesia.
     Gunakan '.' untuk ribuan dan ',' untuk desimal.
     """
-    text_clean = re.sub(r"\s+", " ", text.lower())
+    text_clean = re.sub(r"\s+", " ", (text or "").lower())
     m = re.search(r"luas\s*tanah\s*yang\s*(disetujui|dimohon)\s*[:\-]?\s*([\d\.,]+)", text_clean)
     if not m:
         return None, None
@@ -62,8 +62,10 @@ def parse_luas_from_text(text):
     num_str = num_str.strip()
     num_str = re.sub(r"[^\d\.,]", "", num_str)
     if "." in num_str and "," in num_str:
+        # format like 1.548.038,08 -> remove dots, make comma decimal
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str and "." not in num_str:
+        # format like 14011,50 -> change comma to dot for float parsing
         num_str = num_str.replace(",", ".")
     elif num_str.count(".") > 1:
         parts = num_str.split(".")
@@ -77,7 +79,10 @@ def parse_luas_from_text(text):
 
 def format_angka_id(value):
     """Format angka ke gaya Indonesia: titik ribuan, koma desimal"""
-    return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try:
+        return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return str(value)
 
 
 # ======================
@@ -101,84 +106,103 @@ if uploaded_pkkpr:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
-                # deteksi blok aktif
-                if "koordinat" in text.lower() and "disetujui" in text.lower():
-                    blok_aktif = "disetujui"
-                elif "koordinat" in text.lower() and "dimohon" in text.lower():
-                    blok_aktif = "dimohon"
+                # deteksi blok aktif berdasarkan kata kunci pada baris
+                for line in text.split("\n"):
+                    low = line.lower()
+                    if "koordinat" in low and "disetujui" in low:
+                        blok_aktif = "disetujui"
+                    elif "koordinat" in low and "dimohon" in low:
+                        blok_aktif = "dimohon"
 
-                # baca tabel
+                    # tangkap pasangan angka di baris (float dengan titik)
+                    mline = re.findall(r"[-+]?\d+\.\d+", line)
+                    if len(mline) >= 2:
+                        try:
+                            lon, lat = float(mline[0]), float(mline[1])
+                            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                if blok_aktif == "disetujui":
+                                    coords_disetujui.append((lon, lat))
+                                elif blok_aktif == "dimohon":
+                                    coords_dimohon.append((lon, lat))
+                                else:
+                                    coords_plain.append((lon, lat))
+                        except:
+                            pass
+
+                # baca tabel (jika ada)
                 tables = page.extract_tables()
                 if tables:
                     for tb in tables:
                         for row in tb:
                             if not row:
                                 continue
-                            nums = re.findall(r"[-+]?\d+\.\d+", " ".join([str(x) for x in row if x]))
+                            row_join = " ".join([str(x) for x in row if x is not None])
+                            nums = re.findall(r"[-+]?\d+\.\d+", row_join)
                             if len(nums) >= 2:
-                                lon, lat = float(nums[0]), float(nums[1])
-                                if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                    if blok_aktif == "disetujui":
-                                        coords_disetujui.append((lon, lat))
-                                    elif blok_aktif == "dimohon":
-                                        coords_dimohon.append((lon, lat))
-                                    else:
-                                        coords_plain.append((lon, lat))
+                                try:
+                                    lon, lat = float(nums[0]), float(nums[1])
+                                    if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                        if blok_aktif == "disetujui":
+                                            coords_disetujui.append((lon, lat))
+                                        elif blok_aktif == "dimohon":
+                                            coords_dimohon.append((lon, lat))
+                                        else:
+                                            coords_plain.append((lon, lat))
+                                except:
+                                    pass
 
-                # baca teks bebas
-                for line in text.split("\n"):
-                    low = line.lower().strip()
-                    if "koordinat" in low and "disetujui" in low:
-                        blok_aktif = "disetujui"
-                        continue
-                    elif "koordinat" in low and "dimohon" in low:
-                        blok_aktif = "dimohon"
-                        continue
-
-                    m = re.findall(r"[-+]?\d+\.\d+", line)
-                    if len(m) >= 2:
-                        lon, lat = float(m[0]), float(m[1])
-                        if 95 <= lon <= 141 and -11 <= lat <= 6:
-                            if blok_aktif == "disetujui":
-                                coords_disetujui.append((lon, lat))
-                            elif blok_aktif == "dimohon":
-                                coords_dimohon.append((lon, lat))
-                            else:
-                                coords_plain.append((lon, lat))
-
-        # Ambil luas dokumen
+        # Ambil luas dokumen (jika ada)
         luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-        # Pilih prioritas koordinat
+        # Pilih prioritas koordinat: disetujui > dimohon > plain
         if coords_disetujui:
             coords = coords_disetujui
-            luas_pkkpr_doc_label = "disetujui"
+            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "disetujui"
         elif coords_dimohon:
             coords = coords_dimohon
-            luas_pkkpr_doc_label = "dimohon"
+            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "dimohon"
         elif coords_plain:
             coords = coords_plain
-            luas_pkkpr_doc_label = "tanpa judul"
+            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "tanpa judul"
 
-        # Hilangkan duplikasi
+        # Hilangkan duplikasi sekaligus mempertahankan urutan
         coords = list(dict.fromkeys(coords))
 
-        # Balik urutan lintang–bujur → bujur–lintang (OSS format)
-        flipped_coords = [(y, x) for x, y in coords]
+        # Jika format OSS adalah (lat, lon) per baris, kita perlu membalik jadi (lon, lat).
+        # Heuristik: jika koordinat tampak Lintang di kisaran -11..6 dan Bujur 95..141,
+        # dan urutan yang kita baca tampak (lon, lat) benar, kita biarkan. Jika tidak, coba flip.
+        flipped_coords = []
+        if coords:
+            # Periksa apakah nilai pertama lebih mungkin lat atau lon
+            first_x, first_y = coords[0]
+            # if first_x is within lat range (-11..6) and first_y within lon range (95..141) then flip
+            if -11 <= first_x <= 6 and 95 <= first_y <= 141:
+                # coords are (lat, lon) -> flip them
+                flipped_coords = [(y, x) for x, y in coords]
+            else:
+                # assume coords already (lon, lat)
+                flipped_coords = [(x, y) for x, y in coords]
 
-        # Buat GeoDataFrame
+        # Tutup dan buat geodataframe jika ada koordinat
         if flipped_coords:
+            # pastikan unik lagi dan urutan tetap
+            flipped_coords = list(dict.fromkeys(flipped_coords))
             if flipped_coords[0] != flipped_coords[-1]:
                 flipped_coords.append(flipped_coords[0])
+
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(flipped_coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in flipped_coords],
                 crs="EPSG:4326"
             )
             gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
+        else:
+            gdf_points, gdf_polygon = None, None
 
         with col2:
-            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(flipped_coords)} titik ({luas_pkkpr_doc_label})</p>", unsafe_allow_html=True)
+            label_display = luas_pkkpr_doc_label or "tidak ditemukan"
+            count_display = len(flipped_coords) if flipped_coords else 0
+            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {count_display} titik ({label_display})</p>", unsafe_allow_html=True)
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -306,7 +330,7 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
-    folium.LayerControl(collapsed=True).add_to(m)
+    folium.LayerControl(collapsed=True, position="topright").add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
@@ -343,9 +367,8 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right",
-                    bbox_to_anchor=(0.98, 0.98), fontsize=8, title_fontsize=9,
-                    markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
+    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", bbox_to_anchor=(0.98, 0.98),
+                    fontsize=8, title_fontsize=9, markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
     leg.get_frame().set_alpha(0.7)
 
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
@@ -353,4 +376,6 @@ if gdf_polygon is not None:
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
 
     with open(out_png, "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (
+        st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
+
+    st.pyplot(fig)
