@@ -186,7 +186,6 @@ if gdf_polygon is not None:
 
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
-    *(Proyeksi UTM Zona {utm_zone}):*
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
     - Luas PKKPR (proyeksi WGS 84 / Mercator): {luas_pkkpr_mercator:,.2f} m²
@@ -344,5 +343,6 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
