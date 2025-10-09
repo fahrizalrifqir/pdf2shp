@@ -234,10 +234,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_outside = luas_tapak - luas_overlap
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
-    **Analisis Luas Tapak Proyek (Proyeksi UTM Zona {utm_zone}):**
+    **Analisis Luas Tapak Proyek :*
     - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
     - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
     - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
@@ -344,3 +344,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
