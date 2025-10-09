@@ -47,14 +47,20 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 
 def parse_luas(line):
-    """Konversi teks luas menjadi float"""
+    """
+    Ekstraksi nilai luas dari teks dengan format Indonesia (mis. '1.548.038,08 M²').
+    Menangani spasi acak, titik ribuan, dan koma desimal.
+    """
     if not line:
         return None
+
     match = re.search(r"([\d\.\,\s]+)", line)
     if not match:
         return None
+
     num_str = match.group(1)
     num_str = re.sub(r"[^\d\.,]", "", num_str).replace(" ", "")
+
     if "." in num_str and "," in num_str:
         num_str = num_str.replace(".", "").replace(",", ".")
     elif "," in num_str and "." not in num_str:
@@ -62,20 +68,11 @@ def parse_luas(line):
     elif num_str.count(".") > 1:
         parts = num_str.split(".")
         num_str = "".join(parts[:-1]) + "." + parts[-1]
+
     try:
         return float(num_str)
     except:
         return None
-
-
-def format_indo(num):
-    """Format angka float ke gaya Indonesia: 1.548.038,08"""
-    if num is None:
-        return "-"
-    try:
-        return f"{num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return str(num)
 
 
 # ======================
@@ -93,24 +90,7 @@ if uploaded_pkkpr:
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
         luas_disetujui, luas_dimohon = None, None
         table_mode = None
-
         with pdfplumber.open(uploaded_pkkpr) as pdf:
-            # === Gabungkan semua teks halaman ===
-            full_text = ""
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    full_text += "\n" + text
-
-            # === Cari luas tanah disetujui / dimohon secara global ===
-            match_disetujui = re.search(r"luas\s*tanah\s*yang\s*disetujui[^0-9]*([\d\.\,]+)", full_text, re.IGNORECASE)
-            match_dimohon = re.search(r"luas\s*tanah\s*yang\s*dimohon[^0-9]*([\d\.\,]+)", full_text, re.IGNORECASE)
-            if match_disetujui:
-                luas_disetujui = parse_luas(match_disetujui.group(1))
-            if match_dimohon:
-                luas_dimohon = parse_luas(match_dimohon.group(1))
-
-            # === Ekstraksi tabel koordinat ===
             for page in pdf.pages:
                 table = page.extract_table()
                 if table:
@@ -132,7 +112,12 @@ if uploaded_pkkpr:
                 if not text:
                     continue
                 for line in text.split("\n"):
-                    low = line.lower()
+                    low = line.lower().strip()
+                    if "luas tanah yang disetujui" in low and luas_disetujui is None:
+                        luas_disetujui = parse_luas(line)
+                    elif "luas tanah yang dimohon" in low and luas_dimohon is None:
+                        luas_dimohon = parse_luas(line)
+
                     if "koordinat" in low and "disetujui" in low:
                         table_mode = "disetujui"
                         continue
@@ -154,7 +139,6 @@ if uploaded_pkkpr:
                         except:
                             continue
 
-        # === Pilih koordinat berdasarkan hirarki ===
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc = luas_disetujui if luas_disetujui else luas_dimohon
@@ -165,7 +149,6 @@ if uploaded_pkkpr:
             luas_pkkpr_doc_label = "dimohon"
         elif coords_plain:
             coords = coords_plain
-            luas_pkkpr_doc = None
             luas_pkkpr_doc_label = "tanpa judul"
 
         if coords:
@@ -208,15 +191,13 @@ if gdf_polygon is not None:
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
-
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
-
-    luas_doc_str = f"{format_indo(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
-    - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_indo(luas_pkkpr_mercator)} m²
+    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
+    - Luas PKKPR (proyeksi WGS 84 / Mercator): {luas_pkkpr_mercator:,.2f} m²
     """)
     st.markdown("---")
 
@@ -259,19 +240,19 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
-    luas_doc_str = f"{format_indo(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     **Analisis Luas Tapak Proyek :**
-    - Total Luas Tapak Proyek: {format_indo(luas_tapak)} m²
+    - Total Luas Tapak Proyek: {luas_tapak:,.2f} m²
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {format_indo(luas_pkkpr_hitung)} m²
-    - Luas Tapak Proyek di dalam PKKPR: **{format_indo(luas_overlap)} m²**
-    - Luas Tapak Proyek di luar PKKPR: **{format_indo(luas_outside)} m²**
+    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_hitung:,.2f} m²
+    - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
+    - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
     st.markdown("---")
 
 # ======================
-# === Preview Interaktif ===
+# === Preview Interaktif (4 basemap, collapsed) ===
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
@@ -280,18 +261,19 @@ if gdf_polygon is not None:
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
     Fullscreen(position="bottomleft").add_to(m)
 
-    # Tambahkan basemap pilihan di LayerControl
+    # Tambahkan 4 basemap utama
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("Esri.WorldImagery", name="Esri World Imagery").add_to(m)
+    folium.TileLayer("CartoDB.Voyager", name="CartoDB Voyager").add_to(m)
+    folium.TileLayer("Google Satellite", name="Google Satellite", tiles="https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                     attr="Google", subdomains=["mt0", "mt1", "mt2", "mt3"]).add_to(m)
 
-    # PKKPR Polygon
     folium.GeoJson(
         gdf_polygon.to_crs(epsg=4326),
         name="PKKPR",
         style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}
     ).add_to(m)
 
-    # Tapak Proyek
     if 'gdf_tapak' in locals() and gdf_tapak is not None:
         folium.GeoJson(
             gdf_tapak.to_crs(epsg=4326),
@@ -299,7 +281,6 @@ if gdf_polygon is not None:
             style_function=lambda x: {"color": "red", "weight": 1, "fillColor": "red", "fillOpacity": 0.4}
         ).add_to(m)
 
-    # Titik koordinat
     if gdf_points is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker(
@@ -312,7 +293,8 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
-    folium.LayerControl(collapsed=False, position="topright").add_to(m)
+    # Control basemap disembunyikan dulu (collapsed)
+    folium.LayerControl(collapsed=True, position="topright").add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
@@ -324,7 +306,8 @@ if gdf_polygon is not None:
     out_png = "layout_peta.png"
     gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-    width, height = xmax - xmin, ymax - ymin
+    width = xmax - xmin
+    height = ymax - ymin
     figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
@@ -338,9 +321,7 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_polygon.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
-    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
-
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
     dx, dy = width * 0.05, height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
@@ -350,10 +331,7 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", bbox_to_anchor=(0.98, 0.98),
-                    fontsize=8, title_fontsize=9, markerscale=0.8, labelspacing=0.3, frameon=True, facecolor="white")
-    leg.get_frame().set_alpha(0.7)
-
+    leg = ax.legend(handles=legend_elements, title="Legenda", loc="upper right", fontsize=8)
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
     ax.set_axis_off()
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
@@ -361,4 +339,4 @@ if gdf_polygon is not None:
     with open(out_png, "rb") as f:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
-    st.pyplot
+    st.pyplot(fig)
