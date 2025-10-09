@@ -12,6 +12,7 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
+from pyproj import Transformer
 
 # ======================
 # === Konfigurasi App ===
@@ -58,6 +59,28 @@ def parse_luas(line):
     except:
         return None
 
+def detect_and_transform_coords(coords):
+    """Deteksi otomatis apakah koordinat UTM (meter) atau geografis (derajat)."""
+    if not coords:
+        return coords
+    xs, ys = zip(*coords)
+    if all(abs(x) > 1000 for x in xs) and all(abs(y) > 1000 for y in ys):
+        mean_x = sum(xs) / len(xs)
+        zone = int(mean_x / 100000) + 30
+        epsg_utm = 32700 + zone
+        transformer = Transformer.from_crs(f"EPSG:{epsg_utm}", "EPSG:4326", always_xy=True)
+        transformed = [transformer.transform(x, y) for x, y in coords]
+        return transformed
+    else:
+        return coords
+
+def hitung_luas_wgs84_mercator(gdf):
+    """Hitung luas pada proyeksi WGS 84 / Pseudo Mercator (EPSG:3857)"""
+    if gdf is None or gdf.empty:
+        return None
+    gdf_3857 = gdf.to_crs(epsg=3857)
+    return gdf_3857.area.sum()
+
 # ======================
 # === Upload PKKPR ===
 # ======================
@@ -81,14 +104,9 @@ if uploaded_pkkpr:
                     for row in table:
                         if len(row) >= 3 and row[1] and row[2]:
                             try:
-                                lon, lat = float(row[1]), float(row[2])
-                                if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                    if table_mode == "disetujui":
-                                        coords_disetujui.append((lon, lat))
-                                    elif table_mode == "dimohon":
-                                        coords_dimohon.append((lon, lat))
-                                    else:
-                                        coords_plain.append((lon, lat))
+                                x, y = float(row[1]), float(row[2])
+                                if (95 <= x <= 141 and -11 <= y <= 6) or (x > 1000 and y > 1000):
+                                    coords_plain.append((x, y))
                             except:
                                 continue
 
@@ -97,49 +115,25 @@ if uploaded_pkkpr:
                     continue
                 for line in text.split("\n"):
                     low = line.lower().strip()
-
                     if "luas tanah yang disetujui" in low and luas_disetujui is None:
                         luas_disetujui = parse_luas(line)
                     elif "luas tanah yang dimohon" in low and luas_dimohon is None:
                         luas_dimohon = parse_luas(line)
-
-                    if "koordinat" in low and "disetujui" in low:
-                        table_mode = "disetujui"
-                        continue
-                    elif "koordinat" in low and "dimohon" in low:
-                        table_mode = "dimohon"
-                        continue
-
                     m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
                     if m:
                         try:
-                            lon, lat = float(m.group(1)), float(m.group(2))
-                            if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                if table_mode == "disetujui":
-                                    coords_disetujui.append((lon, lat))
-                                elif table_mode == "dimohon":
-                                    coords_dimohon.append((lon, lat))
-                                else:
-                                    coords_plain.append((lon, lat))
+                            x, y = float(m.group(1)), float(m.group(2))
+                            if (95 <= x <= 141 and -11 <= y <= 6) or (x > 1000 and y > 1000):
+                                coords_plain.append((x, y))
                         except:
                             continue
 
-        # === Pilih koordinat berdasarkan hirarki ===
-        if coords_disetujui:
-            coords = coords_disetujui
-            luas_pkkpr_doc = luas_disetujui if luas_disetujui else luas_dimohon
-            luas_pkkpr_doc_label = "disetujui"
-        elif coords_dimohon:
-            coords = coords_dimohon
-            luas_pkkpr_doc = luas_dimohon
-            luas_pkkpr_doc_label = "dimohon"
-        elif coords_plain:
-            coords = coords_plain
-            luas_pkkpr_doc = None
-            luas_pkkpr_doc_label = "tanpa judul"
+        coords = coords_plain
+        luas_pkkpr_doc = luas_disetujui or luas_dimohon
+        luas_pkkpr_doc_label = "disetujui" if luas_disetujui else "dimohon" if luas_dimohon else "tidak tercantum"
 
-        # buat geodataframe
         if coords:
+            coords = detect_and_transform_coords(coords)
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in coords],
@@ -177,18 +171,17 @@ if gdf_polygon is not None:
 if gdf_polygon is not None:
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-
     gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
-    luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
-
+    luas_pkkpr_utm = gdf_polygon_utm.area.sum()
+    luas_pkkpr_mercator = hitung_luas_wgs84_mercator(gdf_polygon)
     luas_doc_str = f"{luas_pkkpr_doc:,.2f} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
 
     st.info(f"""
-    *(Proyeksi UTM Zona {utm_zone}):**
+    **Perbandingan Luas PKKPR (berdasarkan proyeksi):**
     - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (hitung dari geometri): {luas_pkkpr_hitung:,.2f} m²
+    - Luas PKKPR (UTM Zona {utm_zone}): {luas_pkkpr_utm:,.2f} m²
+    - Luas PKKPR (WGS 84 / Pseudo Mercator): {luas_pkkpr_mercator:,.2f} m²
     """)
-
     st.markdown("---")
 
 # ================================
@@ -244,7 +237,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
     - Luas Tapak Proyek di dalam PKKPR: **{luas_overlap:,.2f} m²**
     - Luas Tapak Proyek di luar PKKPR: **{luas_outside:,.2f} m²**
     """)
-
     st.markdown("---")
 
 # ======================
@@ -289,8 +281,6 @@ if gdf_polygon is not None:
     folium.LayerControl().add_to(m)
     st_folium(m, width=900, height=600)
 
-    st.markdown("---")
-
 # ======================
 # === Layout Peta PNG ===
 # ======================
@@ -304,13 +294,9 @@ if gdf_polygon is not None:
     width = xmax - xmin
     height = ymax - ymin
 
-    if width > height:
-        figsize = (14, 10)
-    else:
-        figsize = (10, 14)
+    figsize = (14, 10) if width > height else (10, 14)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
-
     gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2)
 
     if gdf_tapak is not None:
@@ -321,11 +307,9 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=25)
 
-    basemap_source = ctx.providers.OpenStreetMap.Mapnik if (gdf_tapak is not None and gdf_tapak_3857.area.sum() < 0.01 * width * height) else ctx.providers.Esri.WorldImagery
-    ctx.add_basemap(ax, crs=3857, source=basemap_source, attribution=False)
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, attribution=False)
 
-    dx = width * 0.05
-    dy = height * 0.05
+    dx, dy = width * 0.05, height * 0.05
     ax.set_xlim(xmin - dx, xmax + dx)
     ax.set_ylim(ymin - dy, ymax + dy)
 
@@ -335,20 +319,7 @@ if gdf_polygon is not None:
         mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
         mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
     ]
-
-    leg = ax.legend(
-        handles=legend_elements,
-        title="Legenda",
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.98),
-        fontsize=8,
-        title_fontsize=9,
-        markerscale=0.8,
-        labelspacing=0.3,
-        frameon=True,
-        facecolor="white"
-    )
-    leg.get_frame().set_alpha(0.7)
+    ax.legend(handles=legend_elements, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9, frameon=True)
 
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
     ax.set_axis_off()
