@@ -99,6 +99,7 @@ if uploaded_pkkpr:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
+                # === CARI KOORDINAT DARI TEKS BEBAS ===
                 for line in text.split("\n"):
                     low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
@@ -106,10 +107,12 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    mline = re.findall(r"[-+]?\d+\.\d+", line)
+                    # mendukung koma atau titik desimal
+                    mline = re.findall(r"[-+]?\d+[.,]\d+", line)
                     if len(mline) >= 2:
                         try:
-                            lon, lat = float(mline[0]), float(mline[1])
+                            lon = float(mline[0].replace(",", "."))
+                            lat = float(mline[1].replace(",", "."))
                             if 95 <= lon <= 141 and -11 <= lat <= 6:
                                 if blok_aktif == "disetujui":
                                     coords_disetujui.append((lon, lat))
@@ -120,6 +123,7 @@ if uploaded_pkkpr:
                         except:
                             pass
 
+                # === CARI KOORDINAT DARI TABEL ===
                 tables = page.extract_tables()
                 if tables:
                     for tb in tables:
@@ -127,10 +131,11 @@ if uploaded_pkkpr:
                             if not row:
                                 continue
                             row_join = " ".join([str(x) for x in row if x])
-                            nums = re.findall(r"[-+]?\d+\.\d+", row_join)
+                            nums = re.findall(r"[-+]?\d+[.,]\d+", row_join)
                             if len(nums) >= 2:
                                 try:
-                                    lon, lat = float(nums[0]), float(nums[1])
+                                    lon = float(nums[0].replace(",", "."))
+                                    lat = float(nums[1].replace(",", "."))
                                     if 95 <= lon <= 141 and -11 <= lat <= 6:
                                         if blok_aktif == "disetujui":
                                             coords_disetujui.append((lon, lat))
@@ -143,6 +148,7 @@ if uploaded_pkkpr:
 
         luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
+        # === Pilih jenis koordinat yang ditemukan ===
         if coords_disetujui:
             coords = coords_disetujui
             luas_pkkpr_doc_label = luas_pkkpr_doc_label or "disetujui"
@@ -153,8 +159,9 @@ if uploaded_pkkpr:
             coords = coords_plain
             luas_pkkpr_doc_label = luas_pkkpr_doc_label or "tanpa judul"
 
-        coords = list(dict.fromkeys(coords))
+        coords = list(dict.fromkeys(coords))  # hapus duplikat
 
+        # === Koreksi urutan lon-lat jika terbalik ===
         flipped_coords = []
         if coords:
             first_x, first_y = coords[0]
@@ -163,6 +170,7 @@ if uploaded_pkkpr:
             else:
                 flipped_coords = [(x, y) for x, y in coords]
 
+        # === Buat GDF ===
         if flipped_coords:
             flipped_coords = list(dict.fromkeys(flipped_coords))
             if flipped_coords[0] != flipped_coords[-1]:
