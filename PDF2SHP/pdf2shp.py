@@ -37,7 +37,6 @@ def save_shapefile(gdf):
     
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_shp_path = os.path.join(temp_dir, "PKKPR_Output.shp")
-        # Pastikan CRS adalah geografis (4326) sebelum disimpan, yang merupakan standar SHP
         gdf.to_crs(epsg=4326).to_file(temp_shp_path)
         
         zip_buffer = io.BytesIO()
@@ -68,7 +67,6 @@ def dms_to_decimal(dms_str):
 def parse_luas_from_text(text):
     """Ambil teks luas tanah dari dokumen."""
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
-    # Mencari pola "Luas tanah yang dimohon/disetujui: XXXX M²"
     luas_matches = re.findall(
         r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(M2|M²))",
         text_clean,
@@ -172,22 +170,22 @@ if uploaded_pkkpr:
                                         lat_str = str(row[idx_lat]).strip().replace(",", ".")
                                         
                                         # Hapus semua karakter non-angka/titik/minus (Pembersihan Kritis)
-                                        lon = float(re.sub(r'[^\d\.\-]', '', lon_str))
-                                        lat = float(re.sub(r'[^\d\.\-]', '', lat_str))
+                                        lon_val = float(re.sub(r'[^\d\.\-]', '', lon_str))
+                                        lat_val = float(re.sub(r'[^\d\.\-]', '', lat_str))
                                         
-                                        # VALIDASI PENTING
-                                        is_lon_valid = 90 <= lon <= 145
-                                        is_lat_valid = -11 <= lat <= 6
+                                        # VALIDASI PENTING (Bujur/Longitude, Lintang/Latitude)
+                                        is_lon_valid = 90 <= lon_val <= 145
+                                        is_lat_valid = -11 <= lat_val <= 6
                                         
                                         if is_lon_valid and is_lat_valid:
-                                            coords_plain.append((lon, lat))
+                                            coords_plain.append((lon_val, lat_val))
                                             
                                         # Cek urutan terbalik (Lat, Long)
-                                        is_lon_valid_rev = 90 <= lat <= 145 
-                                        is_lat_valid_rev = -11 <= lon <= 6  
+                                        is_lon_valid_rev = 90 <= lat_val <= 145 
+                                        is_lat_valid_rev = -11 <= lon_val <= 6  
                                         
                                         if is_lon_valid_rev and is_lat_valid_rev:
-                                            coords_plain.append((lat, lon)) # Simpan sebagai (Long, Lat)
+                                            coords_plain.append((lat_val, lon_val)) # Simpan sebagai (Long, Lat)
                                             
                                     except ValueError:
                                         pass
@@ -208,7 +206,7 @@ if uploaded_pkkpr:
             elif coords_dimohon:
                 coords, coords_label = coords_dimohon, "dimohon"
             elif coords_plain:
-                coords, coords_label = coords_plain, "terekstrak dari lampiran"
+                coords, coords_label = coords_plain, "titik unik ditemukan"
             else:
                 coords_label = "tidak ditemukan"
 
@@ -220,7 +218,10 @@ if uploaded_pkkpr:
                 # Koreksi: Jika koordinat pertama menunjukkan urutan (Lat, Long), balikkan
                 flipped_coords = [(y, x) for x, y in coords] if -11 <= fx <= 6 and 90 <= fy <= 145 else coords
                 flipped_coords = list(dict.fromkeys(flipped_coords))
-                if flipped_coords[0] != flipped_coords[-1]:
+                
+                # Logic untuk menutup poligon: 
+                # Jika titik akhir tidak sama dengan titik awal, tambahkan titik awal sebagai titik penutup.
+                if len(flipped_coords) > 1 and flipped_coords[0] != flipped_coords[-1]:
                     flipped_coords.append(flipped_coords[0])
 
                 gdf_points = gpd.GeoDataFrame(
@@ -231,6 +232,7 @@ if uploaded_pkkpr:
                 gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
 
             with col2:
+                # Perhatikan label yang ditampilkan di sini adalah jumlah titik unik
                 st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({coords_label})</p>", unsafe_allow_html=True)
 
         except Exception as e:
@@ -341,7 +343,7 @@ if gdf_polygon is not None:
     Fullscreen(position="bottomleft").add_to(m)
     folium.TileLayer("openstreetmap").add_to(m)
     
-    # Menggunakan Tile yang aman
+    # Tile yang aman
     folium.TileLayer("CartoDB Positron").add_to(m) 
     folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
     
