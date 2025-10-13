@@ -63,30 +63,23 @@ def dms_to_decimal(dms_str):
 
 def parse_luas_from_text(text):
     """
-    Cari nilai luas tanah dari teks PKKPR dengan prioritas:
-    1. disetujui
-    2. dimohon
-    3. tanpa judul
+    Ambil teks luas tanah dari dokumen apa adanya (tanpa konversi numerik),
+    dengan prioritas: disetujui → dimohon → tanpa judul.
     """
-    text_clean = re.sub(r"\s+", " ", (text or "").lower())
-    luas_matches = re.findall(r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+)", text_clean)
+    text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
+
+    luas_matches = re.findall(
+        r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(m2|m²))",
+        text_clean,
+        re.IGNORECASE
+    )
+
     if not luas_matches:
         return None, "tanpa judul"
 
     luas_data = {}
-    for label, num_str in luas_matches:
-        num_str = re.sub(r"[^\d\.,]", "", num_str)
-        if "." in num_str and "," in num_str:
-            num_str = num_str.replace(".", "").replace(",", ".")
-        elif "," in num_str and "." not in num_str:
-            num_str = num_str.replace(",", ".")
-        elif num_str.count(".") > 1:
-            parts = num_str.split(".")
-            num_str = "".join(parts[:-1]) + "." + parts[-1]
-        try:
-            luas_data[label] = float(num_str)
-        except:
-            continue
+    for label, value, satuan in luas_matches:
+        luas_data[label.lower()] = (value.strip().upper() if value else "").replace(" ", "")
 
     if "disetujui" in luas_data:
         return luas_data["disetujui"], "disetujui"
@@ -97,8 +90,12 @@ def parse_luas_from_text(text):
 
 
 def format_angka_id(value):
+    """Format angka gaya Indonesia."""
     try:
-        return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        if value >= 1000:
+            return f"{int(round(value)):,}".replace(",", ".")
+        else:
+            return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return str(value)
 
@@ -266,7 +263,7 @@ if gdf_polygon is not None:
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
 
-    luas_doc_str = f"{format_angka_id(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
+    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(f"""
     - Luas PKKPR (dokumen): {luas_doc_str}
     - Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²
@@ -274,7 +271,8 @@ if gdf_polygon is not None:
     """)
     st.markdown("---")
 
-# (Bagian overlay, preview interaktif, dan layout peta PNG tetap seperti sebelumnya)
+# ======================
+# === Overlay, Peta, Layout PNG ===
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -434,4 +432,5 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
