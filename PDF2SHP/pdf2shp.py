@@ -47,16 +47,20 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 
 def dms_to_decimal(dms_str):
-    """Konversi koordinat DMS (derajat°, menit', detik\") ke desimal."""
+    """Konversi koordinat DMS (° ' " + BT/BB/LS/LU) ke desimal, dukung koma/titik."""
     if not dms_str:
         return None
-    dms_str = dms_str.strip().replace(" ", "")
-    m = re.match(r"(\d+)[°](\d+)'([\d\.]+)\"?([NSEW])", dms_str)
+
+    dms_str = dms_str.strip().replace(" ", "").replace(",", ".")
+    m = re.match(r"(\d+)[°](\d+)'([\d\.]+)\"?([A-Za-z]+)", dms_str)
     if not m:
         return None
+
     deg, minute, second, direction = m.groups()
     decimal = float(deg) + float(minute) / 60 + float(second) / 3600
-    if direction in ["S", "W"]:
+
+    direction = direction.upper()
+    if direction in ["S", "LS", "W", "BB"]:
         decimal *= -1
     return decimal
 
@@ -67,13 +71,11 @@ def parse_luas_from_text(text):
     dengan prioritas: disetujui → dimohon → tanpa judul.
     """
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
-
     luas_matches = re.findall(
         r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(m2|m²))",
         text_clean,
         re.IGNORECASE
     )
-
     if not luas_matches:
         return None, "tanpa judul"
 
@@ -90,7 +92,6 @@ def parse_luas_from_text(text):
 
 
 def format_angka_id(value):
-    """Format angka gaya Indonesia."""
     try:
         if value >= 1000:
             return f"{int(round(value)):,}".replace(",", ".")
@@ -128,12 +129,12 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    # Format DMS
-                    dms_parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", line)
+                    # Format DMS (dengan koma/titik dan BT/BB/LS/LU)
+                    dms_parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", line)
                     if len(dms_parts) >= 2:
                         lon = dms_to_decimal(dms_parts[0])
                         lat = dms_to_decimal(dms_parts[1])
-                        if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
+                        if lon and lat and 90 <= lon <= 145 and -11 <= lat <= 6:
                             if blok_aktif == "disetujui":
                                 coords_disetujui.append((lon, lat))
                             elif blok_aktif == "dimohon":
@@ -148,7 +149,7 @@ if uploaded_pkkpr:
                         try:
                             lon = float(mline[0].replace(",", "."))
                             lat = float(mline[1].replace(",", "."))
-                            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                            if 90 <= lon <= 145 and -11 <= lat <= 6:
                                 if blok_aktif == "disetujui":
                                     coords_disetujui.append((lon, lat))
                                 elif blok_aktif == "dimohon":
@@ -168,13 +169,12 @@ if uploaded_pkkpr:
                             row_join = " ".join([str(x) for x in row if x])
 
                             # Format DMS
-                            if "°" in row_join:
-                                parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", row_join)
-                                if len(parts) >= 2:
-                                    lon = dms_to_decimal(parts[0])
-                                    lat = dms_to_decimal(parts[1])
-                                    if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
-                                        coords_plain.append((lon, lat))
+                            parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", row_join)
+                            if len(parts) >= 2:
+                                lon = dms_to_decimal(parts[0])
+                                lat = dms_to_decimal(parts[1])
+                                if lon and lat and 90 <= lon <= 145 and -11 <= lat <= 6:
+                                    coords_plain.append((lon, lat))
                                 continue
 
                             # Format desimal
@@ -183,12 +183,12 @@ if uploaded_pkkpr:
                                 try:
                                     lon = float(nums[0].replace(",", "."))
                                     lat = float(nums[1].replace(",", "."))
-                                    if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                    if 90 <= lon <= 145 and -11 <= lat <= 6:
                                         coords_plain.append((lon, lat))
                                 except:
                                     pass
 
-        # === Prioritas pembacaan koordinat ===
+        # === Prioritas koordinat ===
         if coords_disetujui:
             coords = coords_disetujui
             coords_label = "disetujui"
@@ -209,7 +209,7 @@ if uploaded_pkkpr:
         flipped_coords = []
         if coords:
             first_x, first_y = coords[0]
-            if -11 <= first_x <= 6 and 95 <= first_y <= 141:
+            if -11 <= first_x <= 6 and 90 <= first_y <= 145:
                 flipped_coords = [(y, x) for x, y in coords]
             else:
                 flipped_coords = [(x, y) for x, y in coords]
@@ -253,7 +253,7 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
 # ======================
-# === Analisis PKKPR Sendiri ===
+# === Analisis PKKPR ===
 # ======================
 if gdf_polygon is not None:
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
@@ -270,9 +270,6 @@ if gdf_polygon is not None:
     - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²
     """)
     st.markdown("---")
-
-# ======================
-# === Overlay, Peta, Layout PNG ===
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -432,5 +429,6 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
