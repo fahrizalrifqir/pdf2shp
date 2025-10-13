@@ -50,15 +50,12 @@ def dms_to_decimal(dms_str):
     """Konversi koordinat DMS (° ' " + BT/BB/LS/LU) ke desimal, dukung koma/titik."""
     if not dms_str:
         return None
-
     dms_str = dms_str.strip().replace(" ", "").replace(",", ".")
     m = re.match(r"(\d+)[°](\d+)'([\d\.]+)\"?([A-Za-z]+)", dms_str)
     if not m:
         return None
-
     deg, minute, second, direction = m.groups()
     decimal = float(deg) + float(minute) / 60 + float(second) / 3600
-
     direction = direction.upper()
     if direction in ["S", "LS", "W", "BB"]:
         decimal *= -1
@@ -66,10 +63,7 @@ def dms_to_decimal(dms_str):
 
 
 def parse_luas_from_text(text):
-    """
-    Ambil teks luas tanah dari dokumen apa adanya (tanpa konversi numerik),
-    dengan prioritas: disetujui → dimohon → tanpa judul.
-    """
+    """Ambil teks luas tanah dari dokumen apa adanya, dengan prioritas: disetujui → dimohon → tanpa judul."""
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
         r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(m2|m²))",
@@ -78,11 +72,9 @@ def parse_luas_from_text(text):
     )
     if not luas_matches:
         return None, "tanpa judul"
-
     luas_data = {}
     for label, value, satuan in luas_matches:
         luas_data[label.lower()] = (value.strip().upper() if value else "").replace(" ", "")
-
     if "disetujui" in luas_data:
         return luas_data["disetujui"], "disetujui"
     elif "dimohon" in luas_data:
@@ -129,7 +121,7 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    # Format DMS (dengan koma/titik dan BT/BB/LS/LU)
+                    # Format DMS (koma/titik + BT/BB/LS/LU)
                     dms_parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", line)
                     if len(dms_parts) >= 2:
                         lon = dms_to_decimal(dms_parts[0])
@@ -159,7 +151,7 @@ if uploaded_pkkpr:
                         except:
                             pass
 
-                # Cek tabel koordinat
+                # Tabel koordinat
                 tables = page.extract_tables()
                 if tables:
                     for tb in tables:
@@ -167,8 +159,6 @@ if uploaded_pkkpr:
                             if not row:
                                 continue
                             row_join = " ".join([str(x) for x in row if x])
-
-                            # Format DMS
                             parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", row_join)
                             if len(parts) >= 2:
                                 lon = dms_to_decimal(parts[0])
@@ -176,8 +166,6 @@ if uploaded_pkkpr:
                                 if lon and lat and 90 <= lon <= 145 and -11 <= lat <= 6:
                                     coords_plain.append((lon, lat))
                                 continue
-
-                            # Format desimal
                             nums = re.findall(r"[-+]?\d+[.,]\d+", row_join)
                             if len(nums) >= 2:
                                 try:
@@ -188,7 +176,7 @@ if uploaded_pkkpr:
                                 except:
                                     pass
 
-        # === Prioritas koordinat ===
+        # Prioritas koordinat
         if coords_disetujui:
             coords = coords_disetujui
             coords_label = "disetujui"
@@ -202,10 +190,9 @@ if uploaded_pkkpr:
             coords_label = "tidak ditemukan"
 
         luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
-
         coords = list(dict.fromkeys(coords))
 
-        # Koreksi urutan lon-lat
+        # Koreksi lon-lat
         flipped_coords = []
         if coords:
             first_x, first_y = coords[0]
@@ -214,12 +201,11 @@ if uploaded_pkkpr:
             else:
                 flipped_coords = [(x, y) for x, y in coords]
 
-        # Buat GeoDataFrame
+        # Buat GDF
         if flipped_coords:
             flipped_coords = list(dict.fromkeys(flipped_coords))
             if flipped_coords[0] != flipped_coords[-1]:
                 flipped_coords.append(flipped_coords[0])
-
             gdf_points = gpd.GeoDataFrame(
                 pd.DataFrame(flipped_coords, columns=["Longitude", "Latitude"]),
                 geometry=[Point(xy) for xy in flipped_coords],
@@ -228,23 +214,8 @@ if uploaded_pkkpr:
             gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
 
         with col2:
-            label_display = coords_label or "tidak ditemukan"
             count_display = len(flipped_coords) if flipped_coords else 0
-            st.markdown(
-                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {count_display} titik ({label_display})</p>",
-                unsafe_allow_html=True,
-            )
-
-    elif uploaded_pkkpr.name.endswith(".zip"):
-        if os.path.exists("pkkpr_shp"):
-            shutil.rmtree("pkkpr_shp")
-        with zipfile.ZipFile(uploaded_pkkpr, "r") as z:
-            z.extractall("pkkpr_shp")
-        gdf_polygon = gpd.read_file("pkkpr_shp")
-        if gdf_polygon.crs is None:
-            gdf_polygon.set_crs(epsg=4326, inplace=True)
-        with col2:
-            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {count_display} titik ({coords_label})</p>", unsafe_allow_html=True)
 
 # === Ekspor SHP PKKPR ===
 if gdf_polygon is not None:
@@ -252,9 +223,7 @@ if gdf_polygon is not None:
     with open(zip_pkkpr_only, "rb") as f:
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, file_name="PKKPR_Hasil_Konversi.zip", mime="application/zip")
 
-# ======================
 # === Analisis PKKPR ===
-# ======================
 if gdf_polygon is not None:
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
@@ -262,13 +231,13 @@ if gdf_polygon is not None:
     luas_pkkpr_hitung = gdf_polygon_utm.area.sum()
     gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
-
     luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(
-    f"- Luas PKKPR (dokumen): {luas_doc_str}\n"
-    f"- Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²\n"
-    f"- Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²"
+        f"- Luas PKKPR (dokumen): {luas_doc_str}\n"
+        f"- Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²\n"
+        f"- Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²"
     )
+    st.markdown("---")
 
 
 # ================================
@@ -430,6 +399,7 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
 
