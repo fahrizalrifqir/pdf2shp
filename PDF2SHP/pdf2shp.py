@@ -264,11 +264,11 @@ if gdf_polygon is not None:
     luas_pkkpr_mercator = gdf_polygon_3857.area.sum()
 
     luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
-    st.info(f"""
-    - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²
-    - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²
-    """)
+    st.info(
+    f"- Luas PKKPR (dokumen): {luas_doc_str}\n"
+    f"- Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²\n"
+    f"- Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²"
+    )
     st.markdown("---")
 
 # ================================
@@ -429,6 +429,7 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
 
