@@ -280,7 +280,7 @@ if gdf_polygon is not None:
     st.info(
         f"**Analisis Luas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
-        f"- Luas PKKPR ({utm_zone}): **{format_angka_id(luas_pkkpr_hitung)} m²**"
+        f"- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_hitung)} m²**"
     )
     st.markdown("---")
 
@@ -418,4 +418,5 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
 
