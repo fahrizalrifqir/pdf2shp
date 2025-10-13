@@ -46,6 +46,24 @@ def save_shapefile(gdf, folder_name, zip_name):
     return zip_path
 
 
+def dms_to_decimal(dms_str):
+    """
+    Konversi koordinat format DMS (derajat°, menit', detik") ke desimal.
+    Contoh: 114°34'54.92"E → 114.581922
+    """
+    if not dms_str:
+        return None
+    dms_str = dms_str.strip().replace(" ", "")
+    m = re.match(r"(\d+)[°](\d+)'([\d\.]+)\"?([NSEW])", dms_str)
+    if not m:
+        return None
+    deg, minute, second, direction = m.groups()
+    decimal = float(deg) + float(minute)/60 + float(second)/3600
+    if direction in ["S", "W"]:
+        decimal *= -1
+    return decimal
+
+
 def parse_luas_from_text(text):
     """Cari dan ubah nilai luas dengan format Indonesia"""
     text_clean = re.sub(r"\s+", " ", (text or "").lower())
@@ -99,7 +117,7 @@ if uploaded_pkkpr:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
-                # === CARI KOORDINAT DARI TEKS BEBAS ===
+                # === CARI KOORDINAT DARI TEKS ===
                 for line in text.split("\n"):
                     low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
@@ -107,7 +125,21 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    # mendukung koma atau titik desimal
+                    # --- Format DMS ---
+                    dms_parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", line)
+                    if len(dms_parts) >= 2:
+                        lon = dms_to_decimal(dms_parts[0])
+                        lat = dms_to_decimal(dms_parts[1])
+                        if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
+                            if blok_aktif == "disetujui":
+                                coords_disetujui.append((lon, lat))
+                            elif blok_aktif == "dimohon":
+                                coords_dimohon.append((lon, lat))
+                            else:
+                                coords_plain.append((lon, lat))
+                        continue
+
+                    # --- Format desimal ---
                     mline = re.findall(r"[-+]?\d+[.,]\d+", line)
                     if len(mline) >= 2:
                         try:
@@ -131,18 +163,25 @@ if uploaded_pkkpr:
                             if not row:
                                 continue
                             row_join = " ".join([str(x) for x in row if x])
+
+                            # --- Format DMS ---
+                            if "°" in row_join:
+                                parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", row_join)
+                                if len(parts) >= 2:
+                                    lon = dms_to_decimal(parts[0])
+                                    lat = dms_to_decimal(parts[1])
+                                    if lon and lat and 95 <= lon <= 141 and -11 <= lat <= 6:
+                                        coords_plain.append((lon, lat))
+                                continue
+
+                            # --- Format desimal ---
                             nums = re.findall(r"[-+]?\d+[.,]\d+", row_join)
                             if len(nums) >= 2:
                                 try:
                                     lon = float(nums[0].replace(",", "."))
                                     lat = float(nums[1].replace(",", "."))
                                     if 95 <= lon <= 141 and -11 <= lat <= 6:
-                                        if blok_aktif == "disetujui":
-                                            coords_disetujui.append((lon, lat))
-                                        elif blok_aktif == "dimohon":
-                                            coords_dimohon.append((lon, lat))
-                                        else:
-                                            coords_plain.append((lon, lat))
+                                        coords_plain.append((lon, lat))
                                 except:
                                     pass
 
