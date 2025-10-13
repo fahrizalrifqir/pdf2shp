@@ -312,17 +312,25 @@ if gdf_polygon is not None and gdf_tapak is not None:
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
-    
-    # Pastikan centroid diambil dari CRS 4326
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
     
     Fullscreen(position="bottomleft").add_to(m)
-    folium.TileLayer("openstreetmap").add_to(m)
-    folium.TileLayer("CartoDB positron").add_to(m)
-    folium.TileLayer("Stamen Terrain").add_to(m)
+    
+    # Tile 1: OpenStreetMap (Aman)
+    folium.TileLayer("openstreetmap").add_to(m) 
+    
+    # Tile 2: Ganti "CartoDB positron" (lowercase) menjadi nama resmi Folium atau xyzservices (Aman)
+    folium.TileLayer("CartoDB Positron").add_to(m) 
+    
+    # Tile 3: HAPUS "Stamen Terrain" yang menyebabkan ValueError.
+    # Jika Anda ingin tile Terrain, gunakan xyzservices:
+    # folium.TileLayer(xyz.Stamen.Terrain, name="Stamen Terrain (via xyzservices)").add_to(m)
+    
+    # Tile 4: Esri World Imagery (Aman karena menggunakan xyzservices)
     folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
     
+    # --- (Sisa kode Folium tidak berubah) ---
     folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
                    name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 2, "fillOpacity": 0}).add_to(m)
     if gdf_tapak is not None:
@@ -332,6 +340,7 @@ if gdf_polygon is not None:
         for i, row in gdf_points.iterrows():
             folium.CircleMarker([row.geometry.y, row.geometry.x], radius=5, color="black",
                                 fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
+    
     folium.LayerControl(collapsed=True).add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
@@ -384,3 +393,4 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
