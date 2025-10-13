@@ -269,7 +269,7 @@ if gdf_polygon is not None:
     f"- Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²\n"
     f"- Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²"
     )
-    st.markdown("---")
+
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -311,14 +311,15 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak - luas_overlap
     luas_doc_str = f"{format_angka_id(luas_pkkpr_doc)} m² ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
-    st.info(f"""
-    **Analisis Luas Tapak Proyek :**
-    - Total Luas Tapak Proyek: {format_angka_id(luas_tapak)} m²
-    - Luas PKKPR (dokumen): {luas_doc_str}
-    - Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²
-    - Luas Tapak Proyek UTM di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**
-    - Luas Tapak Proyek UTM di luar PKKPR: **{format_angka_id(luas_outside)} m²**
-    """)
+    st.info(
+    "**Analisis Luas Tapak Proyek :**\n"
+    f"- Total Luas Tapak Proyek: {format_angka_id(luas_tapak)} m²\n"
+    f"- Luas PKKPR (dokumen): {luas_doc_str}\n"
+    f"- Luas PKKPR (UTM Zona {utm_zone}): {format_angka_id(luas_pkkpr_hitung)} m²\n"
+    f"- Luas Tapak Proyek UTM di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**\n"
+    f"- Luas Tapak Proyek UTM di luar PKKPR: **{format_angka_id(luas_outside)} m²**"
+    )
+
     st.markdown("---")
 
 # ======================
@@ -429,6 +430,7 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
 
 
 
