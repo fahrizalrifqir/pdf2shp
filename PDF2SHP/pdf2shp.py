@@ -47,10 +47,7 @@ def save_shapefile(gdf, folder_name, zip_name):
 
 
 def dms_to_decimal(dms_str):
-    """
-    Konversi koordinat format DMS (derajat°, menit', detik") ke desimal.
-    Contoh: 114°34'54.92"E → 114.581922
-    """
+    """Konversi koordinat DMS (derajat°, menit', detik\") ke desimal."""
     if not dms_str:
         return None
     dms_str = dms_str.strip().replace(" ", "")
@@ -58,38 +55,48 @@ def dms_to_decimal(dms_str):
     if not m:
         return None
     deg, minute, second, direction = m.groups()
-    decimal = float(deg) + float(minute)/60 + float(second)/3600
+    decimal = float(deg) + float(minute) / 60 + float(second) / 3600
     if direction in ["S", "W"]:
         decimal *= -1
     return decimal
 
 
 def parse_luas_from_text(text):
-    """Cari dan ubah nilai luas dengan format Indonesia"""
+    """
+    Cari nilai luas tanah dari teks PKKPR dengan prioritas:
+    1. disetujui
+    2. dimohon
+    3. tanpa judul
+    """
     text_clean = re.sub(r"\s+", " ", (text or "").lower())
-    m = re.search(r"luas\s*tanah\s*yang\s*(disetujui|dimohon)\s*[:\-]?\s*([\d\.,]+)", text_clean)
-    if not m:
-        return None, None
-    label = m.group(1)
-    num_str = m.group(2)
+    luas_matches = re.findall(r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+)", text_clean)
+    if not luas_matches:
+        return None, "tanpa judul"
 
-    num_str = re.sub(r"[^\d\.,]", "", num_str)
-    if "." in num_str and "," in num_str:
-        num_str = num_str.replace(".", "").replace(",", ".")
-    elif "," in num_str and "." not in num_str:
-        num_str = num_str.replace(",", ".")
-    elif num_str.count(".") > 1:
-        parts = num_str.split(".")
-        num_str = "".join(parts[:-1]) + "." + parts[-1]
+    luas_data = {}
+    for label, num_str in luas_matches:
+        num_str = re.sub(r"[^\d\.,]", "", num_str)
+        if "." in num_str and "," in num_str:
+            num_str = num_str.replace(".", "").replace(",", ".")
+        elif "," in num_str and "." not in num_str:
+            num_str = num_str.replace(",", ".")
+        elif num_str.count(".") > 1:
+            parts = num_str.split(".")
+            num_str = "".join(parts[:-1]) + "." + parts[-1]
+        try:
+            luas_data[label] = float(num_str)
+        except:
+            continue
 
-    try:
-        return float(num_str), label
-    except:
-        return None, label
+    if "disetujui" in luas_data:
+        return luas_data["disetujui"], "disetujui"
+    elif "dimohon" in luas_data:
+        return luas_data["dimohon"], "dimohon"
+    else:
+        return None, "tanpa judul"
 
 
 def format_angka_id(value):
-    """Format angka gaya Indonesia"""
     try:
         return f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
@@ -117,7 +124,6 @@ if uploaded_pkkpr:
                 text = page.extract_text() or ""
                 full_text += "\n" + text
 
-                # === CARI KOORDINAT DARI TEKS ===
                 for line in text.split("\n"):
                     low = line.lower()
                     if "koordinat" in low and "disetujui" in low:
@@ -125,7 +131,7 @@ if uploaded_pkkpr:
                     elif "koordinat" in low and "dimohon" in low:
                         blok_aktif = "dimohon"
 
-                    # --- Format DMS ---
+                    # Format DMS
                     dms_parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", line)
                     if len(dms_parts) >= 2:
                         lon = dms_to_decimal(dms_parts[0])
@@ -139,7 +145,7 @@ if uploaded_pkkpr:
                                 coords_plain.append((lon, lat))
                         continue
 
-                    # --- Format desimal ---
+                    # Format desimal
                     mline = re.findall(r"[-+]?\d+[.,]\d+", line)
                     if len(mline) >= 2:
                         try:
@@ -155,7 +161,7 @@ if uploaded_pkkpr:
                         except:
                             pass
 
-                # === CARI KOORDINAT DARI TABEL ===
+                # Cek tabel koordinat
                 tables = page.extract_tables()
                 if tables:
                     for tb in tables:
@@ -164,7 +170,7 @@ if uploaded_pkkpr:
                                 continue
                             row_join = " ".join([str(x) for x in row if x])
 
-                            # --- Format DMS ---
+                            # Format DMS
                             if "°" in row_join:
                                 parts = re.findall(r"\d+°\d+'\d+\.\d+\"[NSEW]", row_join)
                                 if len(parts) >= 2:
@@ -174,7 +180,7 @@ if uploaded_pkkpr:
                                         coords_plain.append((lon, lat))
                                 continue
 
-                            # --- Format desimal ---
+                            # Format desimal
                             nums = re.findall(r"[-+]?\d+[.,]\d+", row_join)
                             if len(nums) >= 2:
                                 try:
@@ -185,22 +191,24 @@ if uploaded_pkkpr:
                                 except:
                                     pass
 
-        luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
-
-        # === Pilih jenis koordinat yang ditemukan ===
+        # === Prioritas pembacaan koordinat ===
         if coords_disetujui:
             coords = coords_disetujui
-            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "disetujui"
+            coords_label = "disetujui"
         elif coords_dimohon:
             coords = coords_dimohon
-            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "dimohon"
+            coords_label = "dimohon"
         elif coords_plain:
             coords = coords_plain
-            luas_pkkpr_doc_label = luas_pkkpr_doc_label or "tanpa judul"
+            coords_label = "tanpa judul"
+        else:
+            coords_label = "tidak ditemukan"
 
-        coords = list(dict.fromkeys(coords))  # hapus duplikat
+        luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-        # === Koreksi urutan lon-lat jika terbalik ===
+        coords = list(dict.fromkeys(coords))
+
+        # Koreksi urutan lon-lat
         flipped_coords = []
         if coords:
             first_x, first_y = coords[0]
@@ -209,7 +217,7 @@ if uploaded_pkkpr:
             else:
                 flipped_coords = [(x, y) for x, y in coords]
 
-        # === Buat GDF ===
+        # Buat GeoDataFrame
         if flipped_coords:
             flipped_coords = list(dict.fromkeys(flipped_coords))
             if flipped_coords[0] != flipped_coords[-1]:
@@ -223,9 +231,12 @@ if uploaded_pkkpr:
             gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
 
         with col2:
-            label_display = luas_pkkpr_doc_label or "tidak ditemukan"
+            label_display = coords_label or "tidak ditemukan"
             count_display = len(flipped_coords) if flipped_coords else 0
-            st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {count_display} titik ({label_display})</p>", unsafe_allow_html=True)
+            st.markdown(
+                f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {count_display} titik ({label_display})</p>",
+                unsafe_allow_html=True,
+            )
 
     elif uploaded_pkkpr.name.endswith(".zip"):
         if os.path.exists("pkkpr_shp"):
@@ -262,6 +273,8 @@ if gdf_polygon is not None:
     - Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²
     """)
     st.markdown("---")
+
+# (Bagian overlay, preview interaktif, dan layout peta PNG tetap seperti sebelumnya)
 
 # ================================
 # === Upload Tapak Proyek (SHP) ===
@@ -421,3 +434,4 @@ if gdf_polygon is not None:
         st.download_button("⬇️ Download Layout Peta (PNG, Auto)", f, "layout_peta.png", mime="image/png")
 
     st.pyplot(fig)
+
