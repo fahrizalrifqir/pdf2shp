@@ -12,6 +12,7 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
+import tempfile # PENTING: Import tempfile
 
 # ======================
 # === Konfigurasi App ===
@@ -29,16 +30,28 @@ def get_utm_info(lon, lat):
     return epsg, zone_label
 
 
-def save_shapefile(gdf, folder_name, zip_name):
-    if os.path.exists(folder_name):
-        shutil.rmtree(folder_name)
-    os.makedirs(folder_name, exist_ok=True)
-    gdf.to_file(os.path.join(folder_name, "data.shp"))
-    zip_path = f"{zip_name}.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        for file in os.listdir(folder_name):
-            zf.write(os.path.join(folder_name, file), arcname=file)
-    return zip_path
+# FUNGSI BARU: Menggunakan io.BytesIO dan tempfile untuk lingkungan cloud
+def save_shapefile(gdf, zip_name):
+    """Menyimpan GeoDataFrame ke ZIP Shapefile di memory buffer."""
+    
+    # 1. Membuat direktori sementara
+    with tempfile.TemporaryDirectory() as temp_dir:
+        output_dir = os.path.join(temp_dir, "shp_output")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 2. Menyimpan GeoDataFrame ke Shapefile di direktori sementara
+        gdf.to_file(os.path.join(output_dir, "data.shp"))
+        
+        # 3. Membuat ZIP file di buffer memori
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in os.listdir(output_dir):
+                file_path = os.path.join(output_dir, file)
+                # Menulis file ke dalam ZIP dari lokasi sementara
+                zf.write(file_path, arcname=file)
+        
+        zip_buffer.seek(0)
+        return zip_buffer.read() # Mengembalikan konten zip sebagai bytes
 
 
 def dms_to_decimal(dms_str):
@@ -99,9 +112,11 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
+        # Penanganan PDF tetap bisa menggunakan file object yang diupload (uploaded_pkkpr)
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
         full_text, blok_aktif = "", None
 
+        # Membaca file yang di-upload dari buffer/file-like object
         with pdfplumber.open(uploaded_pkkpr) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
@@ -185,12 +200,38 @@ if uploaded_pkkpr:
 
         with col2:
             st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik ({coords_label})</p>", unsafe_allow_html=True)
+            
+    # BARU: Penanganan Shapefile PKKPR
+    elif uploaded_pkkpr.name.endswith(".zip"):
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Membaca ZIP dari buffer (uploaded_pkkpr.read())
+                zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), 'r')
+                zip_ref.extractall(temp_dir)
+                zip_ref.close()
+                
+                # Cari file .shp di dalam folder sementara
+                gdf_polygon = gpd.read_file(temp_dir)
+                if gdf_polygon.crs is None:
+                    gdf_polygon.set_crs(epsg=4326, inplace=True)
+                
+                with col2:
+                    st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ Shapefile (PKKPR)</p>", unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Gagal membaca shapefile PKKPR: {e}")
+            gdf_polygon = None
+
 
 # === Ekspor SHP PKKPR ===
 if gdf_polygon is not None:
-    zip_pkkpr_only = save_shapefile(gdf_polygon, "out_pkkpr_only", "PKKPR_Hasil_Konversi")
-    with open(zip_pkkpr_only, "rb") as f:
-        st.download_button("⬇️ Download SHP PKKPR (ZIP)", f, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
+    # Menggunakan fungsi baru yang mengembalikan bytes
+    zip_pkkpr_bytes = save_shapefile(gdf_polygon, "PKKPR_Hasil_Konversi")
+    st.download_button(
+        "⬇️ Download SHP PKKPR (ZIP)", 
+        zip_pkkpr_bytes, # Langsung menggunakan bytes
+        "PKKPR_Hasil_Konversi.zip", 
+        mime="application/zip"
+    )
 
 # === Analisis Luas PKKPR ===
 if gdf_polygon is not None:
@@ -216,15 +257,17 @@ with col1:
 gdf_tapak = None
 if uploaded_tapak:
     try:
-        if os.path.exists("tapak_shp"):
-            shutil.rmtree("tapak_shp")
-        with zipfile.ZipFile(uploaded_tapak, "r") as z:
-            z.extractall("tapak_shp")
-        gdf_tapak = gpd.read_file("tapak_shp")
-        if gdf_tapak.crs is None:
-            gdf_tapak.set_crs(epsg=4326, inplace=True)
-        with col2:
-            st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+        # BARU: Menggunakan tempfile untuk Shapefile Tapak
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()), 'r')
+            zip_ref.extractall(temp_dir)
+            zip_ref.close()
+            
+            gdf_tapak = gpd.read_file(temp_dir) # GeoPandas bisa membaca direktori
+            if gdf_tapak.crs is None:
+                gdf_tapak.set_crs(epsg=4326, inplace=True)
+            with col2:
+                st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Gagal membaca shapefile: {e}")
 
@@ -279,6 +322,8 @@ if gdf_polygon is not None:
 # ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG)")
+    
+    # ... (Plotting logic tidak berubah)
     gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
     width, height = xmax - xmin, ymax - ymin
@@ -301,6 +346,16 @@ if gdf_polygon is not None:
     ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
     ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
     ax.set_axis_off()
-    plt.savefig("layout_peta.png", dpi=300, bbox_inches="tight")
-    with open("layout_peta.png", "rb") as f:
-        st.download_button("⬇️ Download Layout Peta (PNG)", f, "layout_peta.png", mime="image/png")
+    
+    # BARU: Simpan ke buffer memori
+    png_buffer = io.BytesIO()
+    plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+    plt.close(fig) # Tutup figure untuk membebaskan memori
+    png_buffer.seek(0)
+    
+    st.download_button(
+        "⬇️ Download Layout Peta (PNG)", 
+        png_buffer, # Langsung menggunakan buffer
+        "layout_peta.png", 
+        mime="image/png"
+    )
