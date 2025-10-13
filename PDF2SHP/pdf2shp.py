@@ -1,7 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile, shutil, re
+import io, os, zipfile, re
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -17,7 +17,7 @@ import tempfile
 # ======================
 # === Konfigurasi App ===
 # ======================
-st.set_page_config(page_title="PKKPR → SHP + Overlay", layout="wide")
+st.set_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
@@ -81,10 +81,8 @@ def parse_luas_from_text(text):
     if "disetujui" in luas_data:
         return luas_data["disetujui"], "disetujui"
     elif "dimohon" in luas_data:
-        # Menangani kasus seperti UKLUPLALIP.PDF yang hanya menyebut "dimohon"
         return luas_data["dimohon"], "dimohon"
     else:
-        # Coba pola yang lebih sederhana jika yang di atas gagal
         m = re.search(r"luas\s*tanah\s*[:\-]?\s*([\d\.,]+\s*(M2|M²))", text_clean, re.IGNORECASE)
         if m:
              return m.group(1).strip(), "tanpa judul"
@@ -95,11 +93,9 @@ def format_angka_id(value):
     """Format angka besar dengan pemisah ribuan titik."""
     try:
         val = float(value)
-        # Bulatkan ke integer jika nilainya sangat dekat dengan integer
         if abs(val - round(val)) < 0.001:
             return f"{int(round(val)):,}".replace(",", ".")
         else:
-            # Format desimal: gunakan koma sebagai pemisah desimal, titik sebagai pemisah ribuan
             return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return str(value)
@@ -142,56 +138,77 @@ if uploaded_pkkpr:
                                 target.append((lon, lat))
                             continue
                             
-                    # 2. Parsing Tabel Koordinat (Mendukung Desimal dan DMS)
+                    # 2. Parsing Tabel Koordinat (Fokus pada Desimal Murni) (Perbaikan Kritis)
                     for tb in (page.extract_tables() or []):
-                        if len(tb) > 1:
-                            header = [str(c).lower().strip() for c in tb[0] if c]
-                            
-                            idx_lon, idx_lat = -1, -1
-                            
-                            # Logika untuk mencari kolom "Bujur/Longitude" dan "Lintang/Latitude"
-                            try:
-                                # Cari Longitude/Bujur
-                                idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
-                                # Cari Latitude/Lintang
-                                idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
-                            except StopIteration:
-                                # Fallback jika header tidak ada, asumsikan kolom 1 & 2 adalah Long & Lat
-                                if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): # Asumsi tabel punya 3+ kolom (No, Long, Lat)
+                        if len(tb) <= 1: 
+                            continue 
+
+                        header = [str(c).lower().strip() for c in tb[0] if c]
+                        
+                        idx_lon, idx_lat = -1, -1
+                        
+                        # Logika untuk mencari kolom Longitude dan Latitude berdasarkan header
+                        try:
+                            # Prioritas 1: Cari "bujur" dan "lintang"
+                            idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
+                            idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
+                        except StopIteration:
+                            # Prioritas 2: Fallback (Asumsi No, Long/Lat, Lat/Long). Ambil kolom 1 dan 2 setelah 'No.'
+                            if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): 
+                                if len(header) > 2:
+                                    # Default untuk kasus seperti file Anda (indeks 1 dan 2)
                                     idx_lon, idx_lat = 1, 2
-                                elif len(header) >= 2: # Asumsi tabel hanya punya 2 kolom
-                                    idx_lon, idx_lat = 0, 1
+                            elif len(header) == 2:
+                                # Cuma 2 kolom
+                                idx_lon, idx_lat = 0, 1
 
-
-                            for row in tb[1:]:
-                                if len(row) > max(idx_lon, idx_lat) and idx_lon != -1 and idx_lat != -1:
-                                    lon_str, lat_str = str(row[idx_lon]), str(row[idx_lat])
-                                    
-                                    # Coba parsing DMS
-                                    dms_parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", f"{lon_str} {lat_str}")
-                                    if len(dms_parts) >= 2:
-                                        lon, lat = dms_to_decimal(dms_parts[0]), dms_to_decimal(dms_parts[1])
-                                        if lon and lat and 90 <= lon <= 145 and -11 <= lat <= 6:
-                                            coords_plain.append((lon, lat))
-                                            continue
-                                            
-                                    # Coba parsing Desimal Murni
+                        # Jika indeks kolom ditemukan, coba ekstrak data
+                        if idx_lon != -1 and idx_lat != -1 and len(header) > max(idx_lon, idx_lat):
+                            for row in tb[1:]: # Iterasi baris data
+                                if len(row) > max(idx_lon, idx_lat) and row[idx_lon] and row[idx_lat]:
                                     try:
-                                        lon = float(lon_str.replace(",", ".").strip())
-                                        lat = float(lat_str.replace(",", ".").strip())
+                                        # Hapus koma desimal dan ganti dengan titik, lalu bersihkan karakter lain
+                                        lon_str = str(row[idx_lon]).strip().replace(",", ".")
+                                        lat_str = str(row[idx_lat]).strip().replace(",", ".")
                                         
-                                        if 90 <= lon <= 145 and -11 <= lat <= 6:
+                                        # Hapus semua karakter non-angka/titik/minus (Pembersihan Kritis)
+                                        lon = float(re.sub(r'[^\d\.\-]', '', lon_str))
+                                        lat = float(re.sub(r'[^\d\.\-]', '', lat_str))
+                                        
+                                        # VALIDASI PENTING
+                                        is_lon_valid = 90 <= lon <= 145
+                                        is_lat_valid = -11 <= lat <= 6
+                                        
+                                        if is_lon_valid and is_lat_valid:
                                             coords_plain.append((lon, lat))
-                                    except:
+                                            
+                                        # Cek urutan terbalik (Lat, Long)
+                                        is_lon_valid_rev = 90 <= lat <= 145 
+                                        is_lat_valid_rev = -11 <= lon <= 6  
+                                        
+                                        if is_lon_valid_rev and is_lat_valid_rev:
+                                            coords_plain.append((lat, lon)) # Simpan sebagai (Long, Lat)
+                                            
+                                    except ValueError:
                                         pass
-                
-            # Logika Prioritas dan Pemrosesan Akhir
+                        
+                        # Logika untuk parsing DMS di baris tabel (jaga-jaga)
+                        for row in tb[1:]:
+                            if not row: continue
+                            row_join = " ".join([str(x) for x in row if x])
+                            dms_parts = re.findall(r"\d+°\s*\d+'\s*[\d\.,]+\"\s*[A-Za-z]+", row_join)
+                            if len(dms_parts) >= 2:
+                                lon, lat = dms_to_decimal(dms_parts[0]), dms_to_decimal(dms_parts[1])
+                                if lon and lat and 90 <= lon <= 145 and -11 <= lat <= 6:
+                                    coords_plain.append((lon, lat))
+
+            # --- Sisa Logika Setelah Parsing (PRIORITAS & GEODATAFRAME) ---
             if coords_disetujui:
                 coords, coords_label = coords_disetujui, "disetujui"
             elif coords_dimohon:
                 coords, coords_label = coords_dimohon, "dimohon"
             elif coords_plain:
-                coords, coords_label = coords_plain, "tanpa judul/tidak spesifik"
+                coords, coords_label = coords_plain, "terekstrak dari lampiran"
             else:
                 coords_label = "tidak ditemukan"
 
@@ -199,8 +216,8 @@ if uploaded_pkkpr:
             coords = list(dict.fromkeys(coords))
 
             if coords:
-                # Koreksi/Verifikasi urutan Lon-Lat
                 fx, fy = coords[0]
+                # Koreksi: Jika koordinat pertama menunjukkan urutan (Lat, Long), balikkan
                 flipped_coords = [(y, x) for x, y in coords] if -11 <= fx <= 6 and 90 <= fy <= 145 else coords
                 flipped_coords = list(dict.fromkeys(flipped_coords))
                 if flipped_coords[0] != flipped_coords[-1]:
@@ -257,13 +274,11 @@ if gdf_polygon is not None:
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     
     luas_pkkpr_hitung = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
-    luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum()
     luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(
         f"**Analisis Luas Batas PKKPR** (WGS 84 / Zona UTM {utm_zone}):\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
-        f"- Luas PKKPR (Hitungan Geospasial): **{format_angka_id(luas_pkkpr_hitung)} m²**\n"
-        f"- Luas PKKPR (proyeksi WGS 84 / Mercator): {format_angka_id(luas_pkkpr_mercator)} m²"
+        f"- Luas PKKPR (Hitungan Geospasial): **{format_angka_id(luas_pkkpr_hitung)} m²**"
     )
     st.markdown("---")
 
@@ -284,7 +299,6 @@ if uploaded_tapak:
             
             gdf_tapak = gpd.read_file(temp_dir) 
             if gdf_tapak.crs is None:
-                # Asumsi CRS default jika tidak ada PRJ/CRS lain
                 gdf_tapak.set_crs(epsg=4326, inplace=True)
                 
             with col2:
@@ -321,14 +335,13 @@ if gdf_polygon is not None and gdf_tapak is not None:
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     
-    # Pastikan centroid diambil dari CRS 4326
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
     
     Fullscreen(position="bottomleft").add_to(m)
     folium.TileLayer("openstreetmap").add_to(m)
     
-    # Menggunakan nama resmi Folium atau xyzservices untuk menghindari ValueError
+    # Menggunakan Tile yang aman
     folium.TileLayer("CartoDB Positron").add_to(m) 
     folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
     
@@ -356,12 +369,10 @@ if gdf_polygon is not None:
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     
-    # Gunakan proyeksi Mercator (3857) untuk Basemap Contextily
     gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
     xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
     width, height = xmax - xmin, ymax - ymin
     
-    # Buat figure dan axes, tutup figure setelah selesai
     fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
     
     # Plot PKKPR
@@ -380,7 +391,6 @@ if gdf_polygon is not None:
     # Tambahkan Basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
     
-    # Atur batas peta dengan padding
     ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
     ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
     
