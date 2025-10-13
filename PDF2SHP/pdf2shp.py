@@ -275,12 +275,18 @@ if gdf_polygon is not None:
     centroid = gdf_polygon_proj.geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     
-    luas_pkkpr_hitung = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
+    # Hitung Luas UTM
+    luas_pkkpr_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
+    
+    # Hitung Luas WGS 84 Mercator (EPSG:3857)
+    luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum() 
+    
     luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(
-        f"**Analisis Luas PKKPR**:\n"
+        f"**Analisis Luas Batas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
-        f"- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_hitung)} m²**"
+        f"- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n"
+        f"- Luas PKKPR (WGS 84 Mercator/EPSG:3857): **{format_angka_id(luas_pkkpr_mercator)} m²**"
     )
     st.markdown("---")
 
@@ -418,5 +424,3 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
-
-
