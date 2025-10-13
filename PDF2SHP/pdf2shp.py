@@ -278,9 +278,9 @@ if gdf_polygon is not None:
     luas_pkkpr_hitung = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
     luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "-"
     st.info(
-        f"**Analisis Luas Batas PKKPR** (WGS 84 / Zona UTM {utm_zone}):\n"
+        f"**Analisis Luas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
-        f"- Luas PKKPR (Hitungan Geospasial): **{format_angka_id(luas_pkkpr_hitung)} m²**"
+        f"- Luas PKKPR ({utm_zone}): **{format_angka_id(luas_pkkpr_hitung)} m²**"
     )
     st.markdown("---")
 
@@ -325,7 +325,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_outside = luas_tapak - luas_overlap
     
     st.success(
-        "**HASIL ANALISIS OVERLAY TAPAK PROYEK:**\n"
+        "**HASIL ANALISIS OVERLAY TAPAK PROYEK (Proyeksi UTM):**\n"
         f"- Total Luas Tapak Proyek: **{format_angka_id(luas_tapak)} m²**\n"
         f"- Luas Tapak di dalam PKKPR (Overlap): **{format_angka_id(luas_overlap)} m²**\n"
         f"- Luas Tapak di luar PKKPR (Outside): **{format_angka_id(luas_outside)} m²**\n"
@@ -418,3 +418,4 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
