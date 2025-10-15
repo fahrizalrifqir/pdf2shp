@@ -50,8 +50,8 @@ def save_shapefile(gdf):
 
 def parse_coordinate(coord_str):
     """
-    Fungsi universal untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
-    Ditingkatkan untuk menangani format DMS tanpa pemisah yang jelas.
+    Fungsi universal Paling Robust untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
+    Fokus pada penanganan format DMS yang tidak baku/terpadu.
     """
     if not coord_str:
         return None
@@ -59,45 +59,76 @@ def parse_coordinate(coord_str):
     coord_str = coord_str.strip()
     clean_str = coord_str.replace(" ", "").replace(",", ".")
     clean_str = re.sub(r'[\$\{\}\\\^"]', '', clean_str) 
-    
-    # Ganti simbol-simbol D/M/S yang sering salah parsing
     clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
     
     # 1. Coba parse sebagai DMS standar (contoh: 104d57'40.000sBT)
-    m_dms_std = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)", clean_str, re.IGNORECASE)
+    m_dms_std = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
     if m_dms_std:
         try:
             deg, minute, second, _, direction = m_dms_std.groups()
             decimal = float(deg) + float(minute) / 60 + float(second) / 3600
-            if direction.upper() in ["S", "LS", "W", "BB"]:
+            # Handle direction (S, W, LS, BB)
+            if direction and direction.upper() in ["S", "LS", "W", "BB"]:
                 decimal *= -1
             return decimal
         except (ValueError, TypeError):
             pass 
             
-    # 2. Coba parse sebagai DMS tanpa pemisah (contoh: 1045740.000 atau 5410.2312)
-    m_dms_compact = re.match(r"(\d{2,3})(\d{2})([\d\.]+)", clean_str)
-    if m_dms_compact:
-         try:
-            # Asumsi: DDDMMSS.sss (3 digit Derajat, 2 Menit, sisanya Detik)
-            deg_str, minute_str, second_str = m_dms_compact.groups()
-            decimal = float(deg_str) + float(minute_str) / 60 + float(second_str) / 3600
-            
-            # Cek apakah ada arah (N, S, E, W) di akhir string
-            direction_match = re.search(r"[NSEWBS]$", coord_str, re.IGNORECASE)
-            if direction_match and direction_match.group(0).upper() in ["S", "LS", "W", "BB"]:
-                 decimal *= -1
-            return decimal
-         except (ValueError, TypeError):
-            pass
-
-    # 3. Coba parse sebagai Desimal Murni
+    # 2. Coba parse sebagai Desimal Murni (contoh: 98.24312 atau -2.6378)
     try:
-        decimal_str = re.sub(r'[^\d\.\-]', '', clean_str)
-        decimal = float(decimal_str)
+        # Hapus semua karakter non-angka/titik/minus kecuali minus (-)
+        decimal_str_clean = re.sub(r'[^\d\.\-]', '', clean_str)
+        decimal = float(decimal_str_clean)
+        
+        # Jika angka ini sangat besar (> 180), kemungkinan besar itu adalah DMS tanpa pemisah (contoh: 1045740.000)
+        if abs(decimal) > 180: 
+             # Coba paksa interpretasi DMS (DDDMMSS.sss atau DDMMSS.sss)
+             num_part = decimal_str_clean.split('.')[0]
+             
+             if len(num_part) >= 7 and num_part.isdigit(): # Pola DDDMMSS (mis. 1045740)
+                 deg = float(num_part[:3])
+                 minute = float(num_part[3:5])
+                 
+                 # Detik: sisanya termasuk pecahan setelah titik desimal
+                 second_str_with_decimal = num_part[5:]
+                 if '.' in decimal_str_clean:
+                     second_str_with_decimal += '.' + decimal_str_clean.split('.', 1)[1]
+                 
+                 try:
+                    second = float(second_str_with_decimal)
+                    
+                    if 0 <= deg <= 180 and 0 <= minute <= 60:
+                        # Tambahkan logic arah jika ada (contoh: 1045740.000BT)
+                        direction_match = re.search(r"[NSEWBS]$", coord_str, re.IGNORECASE)
+                        dms_decimal = deg + minute / 60 + second / 3600
+                        if direction_match and direction_match.group(0).upper() in ["S", "LS", "W", "BB"]:
+                             dms_decimal *= -1
+                        return dms_decimal
+                 except:
+                     pass
+        
+        # Jika lolos cek besar/DMS, kembalikan sebagai desimal
         return decimal
+        
     except ValueError:
-        return None
+        pass
+        
+    # 3. Coba parse sebagai DMS yang sangat padat tanpa simbol (jika desimal murni gagal)
+    # Ini adalah upaya terakhir jika semua gagal.
+    if len(clean_str.split('.')[0]) >= 7:
+        try:
+            num_str = clean_str.split('.')[0]
+            # Pola: DDDMMSS (3-2-2)
+            deg = float(num_str[:3])
+            minute = float(num_str[3:5])
+            second = float(num_str[5:7]) if len(num_str) >= 7 else 0
+            
+            if 0 <= deg <= 180 and 0 <= minute <= 60:
+                 return deg + minute / 60 + second / 3600
+        except:
+             pass
+
+    return None
 
 def validate_and_fix_coords(lon_val, lat_val):
     """Memvalidasi dan memperbaiki pasangan koordinat untuk Indonesia."""
@@ -108,7 +139,7 @@ def validate_and_fix_coords(lon_val, lat_val):
     if is_lon_valid and is_lat_valid:
         return lon_val, lat_val, False # Lon, Lat, Not Flipped
 
-    # --- Typo Correction Logic ---
+    # --- Typo Correction Logic (Kehilangan digit di Longitude) ---
     if lon_val is not None and lat_val is not None:
         
         # 1. Deteksi Longitude yang kehilangan digit '9' atau '10'
@@ -199,8 +230,7 @@ if uploaded_pkkpr:
                         if len(tb) <= 1: 
                             continue 
 
-                        # Iterasi baris data (mulai dari baris ke-2)
-                        for row in tb[1:]: 
+                        for row in tb[1:]: # Iterasi baris data
                             
                             cleaned_cells = [str(cell).strip() for cell in row if cell]
                             
@@ -222,7 +252,7 @@ if uploaded_pkkpr:
                                     found_valid_pair = True
                                     break 
 
-                            # Logika 2: Coba pasangkan 2 kolom terakhir
+                            # Logika 2: Coba pasangkan 2 kolom terakhir (No., Long, Lat)
                             if not found_valid_pair and len(cleaned_cells) >= 3:
                                 lon_val = parse_coordinate(cleaned_cells[-2])
                                 lat_val = parse_coordinate(cleaned_cells[-1])
@@ -245,7 +275,6 @@ if uploaded_pkkpr:
 
                 luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
                 
-                # Hapus duplikat koordinat
                 coords = list(dict.fromkeys(coords)) 
                 
                 # --- AUTO-FLIP GLOBAL (MENGATASI KESALAHAN LOKASI) ---
@@ -257,8 +286,7 @@ if uploaded_pkkpr:
                     avg_lon = sum(temp_lon) / len(temp_lon)
                     
                     if not (90 <= avg_lon <= 145):
-                        # Jika rata-rata koordinat berada di luar Indonesia, asumsi urutan Long dan Lat terbalik.
-                        # Ini mengatasi kasus di mana Lat/Lon terbalik di sebagian besar baris.
+                        # Jika rata-rata koordinat berada di luar Indonesia, coba balikkan urutan
                         coords_flipped = [(c[1], c[0]) for c in coords]
                         avg_lon_flipped = sum([c[0] for c in coords_flipped]) / len(coords_flipped)
 
@@ -347,7 +375,7 @@ gdf_tapak = None
 if uploaded_tapak:
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
-            zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()), 'r')
+            zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), 'r')
             zip_ref.extractall(temp_dir)
             zip_ref.close()
             
