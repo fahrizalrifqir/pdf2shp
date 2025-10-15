@@ -354,13 +354,12 @@ if gdf_polygon is not None:
     
     Fullscreen(position="bottomleft").add_to(m)
     
-    # Ganti 'attribution' menjadi 'attr' (string kosong) untuk menimpa atribusi bawaan Folium
+    # Ganti 'attribution' menjadi 'attr' (string kosong) untuk menimpa atribusi bawaan
+    # OpenStreetMap dan CartoDB Positron adalah string penyedia bawaan Folium.
     folium.TileLayer("openstreetmap", name="OpenStreetMap", attr='').add_to(m) 
     folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attr='').add_to(m) 
     
-    # Untuk xyzservices provider, kita juga atur attr=''
-    # Esri World Imagery menggunakan xyzservices.providers.Esri.WorldImagery
-    # Dengan attr='' kita menimpa atribusi default yang dibawa oleh provider Esri
+    # Untuk xyzservices provider, kita juga bisa mengatur attr saat menambahkan ke peta.
     folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attr='').add_to(m) 
     
     # Plot PKKPR
@@ -406,9 +405,8 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         
-    # --- PERBAIKAN PENTING DI SINI: disable_attribution=True ---
-    # Ini akan mencegah Contextily (yang digunakan untuk Esri World Imagery) menambahkan teks atribusi
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, disable_attribution=True)
+    # Tambahkan Basemap
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
     
     ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
     ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
