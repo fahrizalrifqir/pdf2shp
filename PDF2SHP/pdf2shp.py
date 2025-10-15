@@ -68,6 +68,7 @@ def parse_coordinate(coord_str):
     clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
     
     # Coba parse sebagai DMS (DMD = Derajat Menit Detik, D = Direction/Arah)
+    # Ini menangani format 104d57'40.000sBT
     m_dms = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)", clean_str, re.IGNORECASE)
     
     if m_dms:
@@ -89,6 +90,38 @@ def parse_coordinate(coord_str):
     except ValueError:
         return None
 
+def validate_and_fix_coords(lon_val, lat_val):
+    """Memvalidasi dan memperbaiki pasangan koordinat untuk Indonesia."""
+    
+    is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
+    is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
+    
+    if is_lon_valid and is_lat_valid:
+        return lon_val, lat_val, False # Lon, Lat, Not Flipped
+
+    # --- Typo Correction Logic (Paling Penting) ---
+    if lon_val is not None and lat_val is not None:
+        
+        # 1. Deteksi Longitude yang kehilangan digit '9' atau '10' (Sumatra, Jawa)
+        if 8 < lon_val < 10 and -11 <= lat_val <= 6: # Longitude 8.xx atau 9.xx (seharusnya 98.xx atau 108.xx)
+            if 0 < lat_val < 6: # Area Sumatra Utara (98.xx)
+                lon_fixed = lon_val + 90
+            else: # Area Jawa/Sumatra Selatan
+                 lon_fixed = lon_val + 100
+                 
+            if 90 <= lon_fixed <= 145:
+                return lon_fixed, lat_val, False # Lon Fixed, Lat, Not Flipped
+        
+        # 2. Cek Pasangan Terbalik (Lat, Long)
+        is_lon_valid_rev = lat_val is not None and 90 <= lat_val <= 145 
+        is_lat_valid_rev = lon_val is not None and -11 <= lon_val <= 6 
+        
+        if is_lon_valid_rev and is_lat_valid_rev:
+            return lat_val, lon_val, True # Longitude dan Latitude Dibalik, Flipped
+
+    return None, None, False # Invalid
+
+# ... (fungsi parse_luas_from_text dan format_angka_id tetap sama) ...
 
 def parse_luas_from_text(text):
     """Ambil teks luas tanah dari dokumen."""
@@ -137,13 +170,13 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
-        full_text, blok_aktif = "", None
+        full_text, blok_aktif = None, None
         
         try:
             with pdfplumber.open(uploaded_pkkpr) as pdf:
                 for page in pdf.pages:
                     text = page.extract_text() or ""
-                    full_text += "\n" + text
+                    full_text = (full_text or "") + "\n" + text
 
                     # Logika penentuan blok "disetujui" atau "dimohon"
                     for line in text.split("\n"):
@@ -158,63 +191,59 @@ if uploaded_pkkpr:
                         if len(tb) <= 1: 
                             continue 
 
-                        header = [str(c).lower().strip() for c in tb[0] if c]
-                        
-                        idx_lon, idx_lat = -1, -1
-                        
-                        try:
-                            # Prioritas 1: Cari "bujur" dan "lintang"
-                            idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
-                            idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
-                        except StopIteration:
-                             # Fallback: Asumsi kolom 1=Bujur, Kolom 2=Lintang (setelah kolom Nomor)
-                             if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): 
-                                 if len(header) > 2:
-                                     idx_lon, idx_lat = 1, 2
-                             elif len(header) == 2:
-                                 idx_lon, idx_lat = 0, 1
+                        # Iterasi baris data (mulai dari baris ke-2)
+                        for row in tb[1:]: 
+                            
+                            # Membersihkan semua sel di baris
+                            cleaned_cells = [str(cell).strip() for cell in row if cell]
+                            
+                            # Kita hanya tertarik pada baris dengan setidaknya 2 nilai
+                            if len(cleaned_cells) < 2:
+                                continue
+                            
+                            found_valid_pair = False
+                            
+                            # Iterasi semua pasangan nilai berdekatan di baris
+                            for i in range(len(cleaned_cells) - 1):
+                                str1, str2 = cleaned_cells[i], cleaned_cells[i+1]
 
-                        if idx_lon != -1 and idx_lat != -1:
-                            for row in tb[1:]: # Iterasi baris data
-                                # --- Perbaikan Robustness: Pastikan sel tidak None/kosong ---
-                                cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+                                val1 = parse_coordinate(str1)
+                                val2 = parse_coordinate(str2)
+                                
+                                # Coba pasangkan (Val1, Val2) sebagai (Long, Lat)
+                                lon_fixed, lat_fixed, is_flipped = validate_and_fix_coords(val1, val2)
+                                
+                                if lon_fixed is not None:
+                                    target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
+                                    target.append((lon_fixed, lat_fixed))
+                                    found_valid_pair = True
+                                    break # Jika pasangan valid ditemukan, pindah ke baris berikutnya
+                                
+                                # Coba pasangkan (Val2, Val1) sebagai (Long, Lat) (kemungkinan urutan terbalik di kolom)
+                                lon_fixed, lat_fixed, is_flipped = validate_and_fix_coords(val2, val1)
+                                
+                                if lon_fixed is not None:
+                                    target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
+                                    target.append((lon_fixed, lat_fixed))
+                                    found_valid_pair = True
+                                    break # Jika pasangan valid ditemukan, pindah ke baris berikutnya
+                            
+                            # Logika tambahan untuk kasus 3 kolom (No., Long, Lat) atau 4 kolom (No., Long D/M/S, Lat D/M/S)
+                            if not found_valid_pair and len(cleaned_cells) >= 3:
+                                # Asumsikan kolom 1/2 adalah Long dan kolom 2/3 adalah Lat (setelah kolom No)
+                                lon_str = cleaned_cells[-2] 
+                                lat_str = cleaned_cells[-1]
+                                lon_val = parse_coordinate(lon_str)
+                                lat_val = parse_coordinate(lat_str)
+                                
+                                lon_fixed, lat_fixed, is_flipped = validate_and_fix_coords(lon_val, lat_val)
+                                
+                                if lon_fixed is not None:
+                                    target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
+                                    target.append((lon_fixed, lat_fixed))
+                                    found_valid_pair = True
 
-                                if len(cleaned_row) > max(idx_lon, idx_lat) and cleaned_row[idx_lon] and cleaned_row[idx_lat]:
-                                    lon_str, lat_str = cleaned_row[idx_lon], cleaned_row[idx_lat]
-                                    
-                                    # Gunakan fungsi parse_coordinate yang universal
-                                    lon_val = parse_coordinate(lon_str)
-                                    lat_val = parse_coordinate(lat_str)
-
-                                    # Validasi Awal (Indonesia: Longitude 90-145, Latitude -11 hingga 6)
-                                    is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
-                                    is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
-                                    
-                                    # --- Typo Correction Logic (khusus Longitude di Sumatra) ---
-                                    if not is_lon_valid and lon_val is not None:
-                                        # Longitude Sumatra sering typo (misalnya 8.xx padahal 98.xx)
-                                        if 8 < lon_val < 10 and is_lat_valid:
-                                            lon_val += 90 
-                                            is_lon_valid = 90 <= lon_val <= 145 # Re-validate
-                                        # Longitude Jawa sering typo (misalnya 6.xx padahal 106.xx)
-                                        elif 6 < lon_val < 10 and is_lat_valid:
-                                            lon_val += 100 
-                                            is_lon_valid = 90 <= lon_val <= 145 # Re-validate
-                                    # --- End Typo Correction ---
-
-                                    if is_lon_valid and is_lat_valid:
-                                        target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
-                                        target.append((lon_val, lat_val))
-                                    else:
-                                        # Cek urutan terbalik (Lat, Long)
-                                        is_lon_valid_rev = lat_val is not None and 90 <= lat_val <= 145 
-                                        is_lat_valid_rev = lon_val is not None and -11 <= lon_val <= 6 
-                                        
-                                        if is_lon_valid_rev and is_lat_valid_rev:
-                                            # Simpan sebagai (Long, Lat)
-                                            target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
-                                            target.append((lat_val, lon_val))
-                                        
+                                
                 # --- Sisa Logika Setelah Parsing (PRIORITAS & GEODATAFRAME) ---
                 if coords_disetujui:
                     coords, coords_label = coords_disetujui, "disetujui"
@@ -411,7 +440,7 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         
-    # Tambahkan Basemap (TANPA disable_attribution=True)
+    # Tambahkan Basemap
     ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
     
     ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
