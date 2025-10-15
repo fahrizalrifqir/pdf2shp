@@ -349,17 +349,18 @@ if gdf_polygon is not None:
     
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     
-    # Inisialisasi peta Folium dengan 'tiles=None' dan 'attr=''' untuk menghilangkan atribusi default
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, attr='').add_child(folium.LayerControl())
+    # Inisialisasi peta Folium. Gunakan tiles=None dan attr='' untuk menghilangkan atribusi default.
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, attr='')
     
     Fullscreen(position="bottomleft").add_to(m)
     
-    # Tambahkan TileLayer dengan atribusi dinonaktifkan: attribution=''
-    folium.TileLayer("openstreetmap", name="OpenStreetMap", attribution='').add_to(m) 
+    # Ganti 'attribution' menjadi 'attr' (string kosong) untuk menimpa atribusi bawaan
+    # OpenStreetMap dan CartoDB Positron adalah string penyedia bawaan Folium.
+    folium.TileLayer("openstreetmap", name="OpenStreetMap", attr='').add_to(m) 
+    folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attr='').add_to(m) 
     
-    # Tile yang aman (atribusi dinonaktifkan)
-    folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attribution='').add_to(m) 
-    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attribution='').add_to(m) 
+    # Untuk xyzservices provider, kita juga bisa mengatur attr saat menambahkan ke peta.
+    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attr='').add_to(m) 
     
     # Plot PKKPR
     folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
