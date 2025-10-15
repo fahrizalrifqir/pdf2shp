@@ -101,82 +101,97 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        full_text = ""
-        coords_by_type = {"disetujui": [], "dimohon": [], "lainnya": []}
-        found_priority = None
+    full_text = ""
+    coords_by_type = {"disetujui": [], "dimohon": [], "lainnya": []}
+    found_priority = None
+    found_disetujui, found_dimohon = False, False
 
-        try:
-            with st.spinner("🔍 Membaca dan mengekstrak koordinat dari PDF..."):
-                with pdfplumber.open(uploaded_pkkpr) as pdf:
-                    for page in pdf.pages:
-                        text = page.extract_text() or ""
-                        full_text += "\n" + text
-                        low = text.lower()
+    try:
+        with st.spinner("🔍 Membaca dan mengekstrak koordinat dari PDF..."):
+            with pdfplumber.open(uploaded_pkkpr) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    full_text += "\n" + text
+                    low = text.lower()
 
-                        # Tentukan blok aktif
-                        blok_aktif = None
-                        if "koordinat" in low and "disetujui" in low:
-                            blok_aktif = "disetujui"
-                        elif "koordinat" in low and "dimohon" in low:
-                            blok_aktif = "dimohon"
+                    blok_aktif = None
+                    if "koordinat" in low and "disetujui" in low:
+                        blok_aktif = "disetujui"
+                        found_disetujui = True
+                    elif "koordinat" in low and "dimohon" in low:
+                        blok_aktif = "dimohon"
+                        found_dimohon = True
+                    else:
+                        blok_aktif = "lainnya"
 
-                        # Jika sudah pernah dapat "disetujui", tidak perlu baca lainnya
-                        if found_priority == "disetujui":
+                    for tb in (page.extract_tables() or []):
+                        if len(tb) <= 1:
+                            continue
+                        header = [str(c).lower().strip() for c in tb[0] if c]
+                        idx_lon, idx_lat = -1, -1
+                        try:
+                            idx_lon = next(i for i, h in enumerate(header) if "bujur" in h)
+                            idx_lat = next(i for i, h in enumerate(header) if "lintang" in h)
+                        except StopIteration:
+                            if len(header) >= 3 and any("no" in h for h in header):
+                                idx_lon, idx_lat = 1, 2
+                            elif len(header) == 2:
+                                idx_lon, idx_lat = 0, 1
+
+                        if idx_lon == -1 or idx_lat == -1:
                             continue
 
-                        for tb in (page.extract_tables() or []):
-                            if len(tb) <= 1:
+                        for row in tb[1:]:
+                            if len(row) <= max(idx_lon, idx_lat):
+                                continue
+                            row_join = " ".join([str(x) for x in row if x]).strip()
+                            if not re.search(r"\d+\.\d+", row_join):
                                 continue
 
-                            header = [str(c).lower().strip() for c in tb[0] if c]
-                            idx_lon, idx_lat = -1, -1
-
-                            # deteksi kolom
+                            lon_str = str(row[idx_lon]).replace(",", ".").strip()
+                            lat_str = str(row[idx_lat]).replace(",", ".").strip()
                             try:
-                                idx_lon = next(i for i, h in enumerate(header) if "bujur" in h)
-                                idx_lat = next(i for i, h in enumerate(header) if "lintang" in h)
-                            except StopIteration:
-                                if len(header) >= 3 and any("no" in h for h in header):
-                                    idx_lon, idx_lat = 1, 2
-                                elif len(header) == 2:
-                                    idx_lon, idx_lat = 0, 1
-
-                            if idx_lon == -1 or idx_lat == -1:
+                                lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
+                                lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
+                            except:
+                                continue
+                            if not (90 <= lon_val <= 145 and -11 <= lat_val <= 6):
                                 continue
 
-                            for row in tb[1:]:
-                                if len(row) <= max(idx_lon, idx_lat):
-                                    continue
-                                row_join = " ".join([str(x) for x in row if x]).strip()
-                                if not re.search(r"\d+\.\d+", row_join):
-                                    continue
+                            coords_by_type[blok_aktif].append((lon_val, lat_val))
 
-                                lon_str = str(row[idx_lon]).replace(",", ".").strip()
-                                lat_str = str(row[idx_lat]).replace(",", ".").strip()
-                                try:
-                                    lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
-                                    lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
-                                except:
-                                    continue
-                                if not (90 <= lon_val <= 145 and -11 <= lat_val <= 6):
-                                    continue
+        # Tentukan prioritas hasil
+        if found_disetujui and coords_by_type["disetujui"]:
+            coords_final = coords_by_type["disetujui"]
+            coords_label = "disetujui"
+        elif found_dimohon and coords_by_type["dimohon"]:
+            coords_final = coords_by_type["dimohon"]
+            coords_label = "dimohon"
+        elif coords_by_type["lainnya"]:
+            coords_final = coords_by_type["lainnya"]
+            coords_label = "lainnya"
+        else:
+            coords_final, coords_label = [], "tidak ditemukan"
 
-                                # Tentukan target blok
-                                target = "lainnya"
-                                if blok_aktif == "disetujui":
-                                    target = "disetujui"
-                                elif blok_aktif == "dimohon":
-                                    target = "dimohon"
+        luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-                                coords_by_type[target].append((lon_val, lat_val))
+        if coords_final:
+            if coords_final[0] != coords_final[-1]:
+                coords_final.append(coords_final[0])
 
-                        # Tentukan prioritas yang sudah ditemukan
-                        if coords_by_type["disetujui"]:
-                            found_priority = "disetujui"
-                        elif not found_priority and coords_by_type["dimohon"]:
-                            found_priority = "dimohon"
-                        elif not found_priority and coords_by_type["lainnya"]:
-                            found_priority = "lainnya"
+            gdf_points = gpd.GeoDataFrame(
+                pd.DataFrame(coords_final, columns=["Longitude", "Latitude"]),
+                geometry=[Point(xy) for xy in coords_final],
+                crs="EPSG:4326"
+            )
+            gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords_final)], crs="EPSG:4326")
+
+        with col2:
+            st.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords_final)} titik ({coords_label})</p>", unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"Gagal memproses PDF: {e}")
+        gdf_polygon = None
 
             # Ambil sesuai prioritas
             if found_priority:
@@ -325,4 +340,5 @@ if gdf_polygon is not None:
     plt.close(fig)
     png_buffer.seek(0)
     st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
+
 
