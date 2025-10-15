@@ -79,10 +79,10 @@ def parse_luas_from_text(text):
 def format_angka_id(value):
     """Format angka besar dengan pemisah ribuan titik dan 2 desimal koma."""
     try:
-        val = float(value)
+        val = float(str(value).replace(',', '.')) # Pastikan input string diubah ke float dengan benar
         # Jika angka sangat dekat dengan integer, format sebagai integer
         if abs(val - round(val)) < 0.001:
-            return f"{int(round(val)):,}".replace(",", ".")
+            return f"{int(round(val)):,}".replace(",", "X").replace(".", ",").replace("X", ".")
         # Jika tidak, format sebagai float dengan gaya Indonesia
         else:
             return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -170,47 +170,47 @@ if uploaded_pkkpr:
                                     except (ValueError, TypeError):
                                         continue
 
-            # === Prioritas & Pembersihan Hasil ===
-            coords_final, coords_label = [], "tidak ditemukan"
-            if coords_by_type["disetujui"]:
-                coords_final = coords_by_type["disetujui"]
-                coords_label = "disetujui"
-            elif coords_by_type["dimohon"]:
-                coords_final = coords_by_type["dimohon"]
-                coords_label = "dimohon"
-            elif coords_by_type["lainnya"]:
-                coords_final = coords_by_type["lainnya"]
-                coords_label = "lainnya"
+                # === Prioritas & Pembersihan Hasil ===
+                coords_final, coords_label = [], "tidak ditemukan"
+                if coords_by_type["disetujui"]:
+                    coords_final = coords_by_type["disetujui"]
+                    coords_label = "disetujui"
+                elif coords_by_type["dimohon"]:
+                    coords_final = coords_by_type["dimohon"]
+                    coords_label = "dimohon"
+                elif coords_by_type["lainnya"]:
+                    coords_final = coords_by_type["lainnya"]
+                    coords_label = "lainnya"
 
-            luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
+                luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
-            if coords_final:
-                # --- PERBAIKAN LOGIKA: Hapus duplikat sambil menjaga urutan ---
-                coords_unique = list(OrderedDict.fromkeys(coords_final))
+                if coords_final:
+                    # --- PERBAIKAN LOGIKA: Hapus duplikat sambil menjaga urutan ---
+                    coords_unique = list(OrderedDict.fromkeys(coords_final))
 
-                # Pastikan poligon tertutup
-                if coords_unique[0] != coords_unique[-1]:
-                    coords_unique.append(coords_unique[0])
+                    # Pastikan poligon tertutup
+                    if len(coords_unique) > 0 and coords_unique[0] != coords_unique[-1]:
+                        coords_unique.append(coords_unique[0])
 
-                gdf_points = gpd.GeoDataFrame(
-                    geometry=[Point(xy) for xy in coords_unique],
-                    crs="EPSG:4326"
-                )
-                gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords_unique)], crs="EPSG:4326")
-                
-                with col2:
-                    st.markdown(f"""
-                    <div style="padding-top: 2.5rem;">
-                        <p style='color:green; font-weight:bold;'>✅ PDF Berhasil Diproses</p>
-                        <ul style='margin-left: -20px; font-size: 0.9em;'>
-                            <li><b>{len(coords_unique)-1}</b> titik unik ditemukan.</li>
-                            <li>Kategori: <b>{coords_label.capitalize()}</b></li>
-                        </ul>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                 with col2:
-                    st.error("Tidak ada koordinat yang dapat diekstrak dari PDF.")
+                    gdf_points = gpd.GeoDataFrame(
+                        geometry=[Point(xy) for xy in coords_unique],
+                        crs="EPSG:4326"
+                    )
+                    gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords_unique)], crs="EPSG:4326")
+                    
+                    with col2:
+                        st.markdown(f"""
+                        <div style="padding-top: 2.5rem;">
+                            <p style='color:green; font-weight:bold;'>✅ PDF Berhasil Diproses</p>
+                            <ul style='margin-left: -20px; font-size: 0.9em;'>
+                                <li><b>{len(coords_unique)-1 if len(coords_unique) > 0 else 0}</b> titik unik ditemukan.</li>
+                                <li>Kategori: <b>{coords_label.capitalize()}</b></li>
+                            </ul>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    with col2:
+                        st.error("Tidak ada koordinat yang dapat diekstrak dari PDF.")
 
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
@@ -248,14 +248,18 @@ if gdf_polygon is not None and not gdf_polygon.empty:
     gdf_wgs84 = gdf_polygon.to_crs(epsg=4326)
     centroid = gdf_wgs84.geometry.unary_union.centroid
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-
+    
+    # Calculate Areas
     luas_pkkpr_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
-    luas_doc_str = f"{luas_pkkpr_doc} (kategori: {luas_pkkpr_doc_label})" if luas_pkkpr_doc else "Tidak ditemukan"
+    luas_pkkpr_3857 = gdf_polygon.to_crs(epsg=3857).area.sum() # WGS 84 / Pseudo-Mercator
+
+    luas_doc_str = format_angka_id(luas_pkkpr_doc) if luas_pkkpr_doc else "Tidak ditemukan"
 
     st.info(
         f"**Analisis Luas Batas PKKPR**:\n"
-        f"- Luas dari dokumen: **{luas_doc_str}**\n"
-        f"- Luas terhitung (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n"
+        f"- Luas PKKPR dari dokumen ({luas_pkkpr_doc_label.capitalize()}): **{luas_doc_str} m²**\n"
+        f"- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n"
+        f"- Luas PKKPR (WGS 84 Mercator / EPSG:3857): **{format_angka_id(luas_pkkpr_3857)} m²**"
     )
     st.markdown("---")
 
@@ -279,7 +283,7 @@ if uploaded_tapak:
                 with col2_tapak:
                     st.markdown("<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ Shapefile tapak terbaca.</p>", unsafe_allow_html=True)
             else:
-                 st.error("File .shp tidak ditemukan di dalam ZIP tapak proyek.")
+                st.error("File .shp tidak ditemukan di dalam ZIP tapak proyek.")
     except Exception as e:
         st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
 
@@ -290,23 +294,51 @@ if gdf_polygon is not None and not gdf_polygon.empty:
     if gdf_tapak is not None and not gdf_tapak.empty:
         centroid = gdf_polygon.to_crs(epsg=4326).geometry.unary_union.centroid
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
+        
+        # --- UTM Calculation ---
         gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg)
         gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg)
         luas_tapak_utm = gdf_tapak_utm.area.sum()
+
+        # --- Mercator Calculation (EPSG:3857) ---
+        gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+        gdf_polygon_3857 = gdf_polygon.to_crs(epsg=3857)
+        luas_tapak_3857 = gdf_tapak_3857.area.sum()
+        
+        luas_overlap_utm, luas_outside_utm = 0, luas_tapak_utm
+        luas_overlap_3857, luas_outside_3857 = 0, luas_tapak_3857
+        
         try:
+            # Clean geometries for robust overlay (UTM)
             if not gdf_tapak_utm.is_valid.all(): gdf_tapak_utm.geometry = gdf_tapak_utm.geometry.buffer(0)
             if not gdf_polygon_utm.is_valid.all(): gdf_polygon_utm.geometry = gdf_polygon_utm.geometry.buffer(0)
-            gdf_overlap = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection")
-            luas_overlap = gdf_overlap.area.sum()
-        except Exception:
-            luas_overlap = 0
-        luas_outside = luas_tapak_utm - luas_overlap
+            gdf_overlap_utm = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection", keep_geom_type=True)
+            luas_overlap_utm = gdf_overlap_utm.area.sum()
+            luas_outside_utm = luas_tapak_utm - luas_overlap_utm
+        except Exception as e:
+            st.warning(f"Gagal menghitung overlay UTM: {e}")
+
+        try:
+            # Clean geometries for robust overlay (3857)
+            if not gdf_tapak_3857.is_valid.all(): gdf_tapak_3857.geometry = gdf_tapak_3857.geometry.buffer(0)
+            if not gdf_polygon_3857.is_valid.all(): gdf_polygon_3857.geometry = gdf_polygon_3857.geometry.buffer(0)
+            gdf_overlap_3857 = gpd.overlay(gdf_tapak_3857, gdf_polygon_3857, how="intersection", keep_geom_type=True)
+            luas_overlap_3857 = gdf_overlap_3857.area.sum()
+            luas_outside_3857 = luas_tapak_3857 - luas_overlap_3857
+        except Exception as e:
+            st.warning(f"Gagal menghitung overlay Mercator (EPSG:3857): {e}")
+
 
         st.success(
-            f"**HASIL ANALISIS OVERLAY (PROYEKSI UTM {utm_zone}):**\n"
+            f"**HASIL ANALISIS OVERLAY**:\n"
+            f"**Proyeksi UTM ({utm_zone}):**\n"
             f"- Total Luas Tapak Proyek: **{format_angka_id(luas_tapak_utm)} m²**\n"
-            f"- Luas Tumpang Tindih (di dalam PKKPR): **{format_angka_id(luas_overlap)} m²**\n"
-            f"- Luas di Luar PKKPR: **{format_angka_id(luas_outside)} m²**"
+            f"- Luas Tapak di dalam PKKPR (Overlap): **{format_angka_id(luas_overlap_utm)} m²**\n"
+            f"- Luas Tapak di luar PKKPR (Outside): **{format_angka_id(luas_outside_utm)} m²**\n"
+            f"**Proyeksi WGS 84 Mercator (EPSG:3857):**\n"
+            f"- Total Luas Tapak Proyek: **{format_angka_id(luas_tapak_3857)} m²**\n"
+            f"- Luas Tapak di dalam PKKPR (Overlap): **{format_angka_id(luas_overlap_3857)} m²**\n"
+            f"- Luas Tapak di luar PKKPR (Outside): **{format_angka_id(luas_outside_3857)} m²**"
         )
         st.markdown("---")
 
@@ -316,6 +348,7 @@ if gdf_polygon is not None and not gdf_polygon.empty:
         centroid = gdf_polygon.to_crs(epsg=4326).geometry.unary_union.centroid
         m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
         folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
+        # Basemap ESRI untuk peta interaktif (Folium)
         folium.TileLayer(xyz.Esri.WorldImagery, name="Citra Satelit Esri").add_to(m)
         folium.TileLayer("CartoDB Positron", name="Peta Dasar Terang").add_to(m)
         folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="Batas PKKPR", style_function=lambda x: {"color": "#FFFF00", "weight": 3, "fillOpacity": 0.1, "dashArray": "5, 5"}).add_to(m)
@@ -336,22 +369,67 @@ if gdf_polygon is not None and not gdf_polygon.empty:
             gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
             xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
             width, height = xmax - xmin, ymax - ymin
-            fig, ax = plt.subplots(figsize=(12, 12 * (height/width) if width > 0 else 12), dpi=150)
+            
+            # Prevent division by zero if geometry is a point or invalid
+            aspect_ratio = (height / width) if width > 0 else 1.0
+            fig, ax = plt.subplots(figsize=(12, 12 * aspect_ratio), dpi=150)
+            
             gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="#FFFF00", linewidth=2.5)
-            if gdf_tapak is not None: gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="#FF0000", alpha=0.5, edgecolor="#FF0000")
-            if gdf_points is not None: gdf_points.to_crs(epsg=3857).plot(ax=ax, color="#FFA500", edgecolor="#000000", markersize=30)
+            
+            if gdf_tapak is not None: 
+                # Re-calculate overlay geometry in 3857 for the map visual
+                gdf_tapak_3857_plot = gdf_tapak.to_crs(epsg=3857)
+                if not gdf_tapak_3857_plot.is_valid.all(): gdf_tapak_3857_plot.geometry = gdf_tapak_3857_plot.geometry.buffer(0)
+                if not gdf_poly_3857.is_valid.all(): gdf_poly_3857.geometry = gdf_poly_3857.geometry.buffer(0)
+                
+                # Area Overlap
+                try:
+                    gdf_overlap_plot = gpd.overlay(gdf_tapak_3857_plot, gdf_poly_3857, how="intersection", keep_geom_type=True)
+                    gdf_overlap_plot.plot(ax=ax, facecolor="#00FF00", alpha=0.6, edgecolor="#008000", label="Overlap", zorder=2)
+                except Exception:
+                    pass
+
+                # Area Outside (Difference)
+                try:
+                    # Difference of Tapak Proyek and PKKPR to get area outside
+                    gdf_outside_plot = gpd.overlay(gdf_tapak_3857_plot, gdf_poly_3857, how="difference", keep_geom_type=True)
+                    gdf_outside_plot.plot(ax=ax, facecolor="#FF0000", alpha=0.6, edgecolor="#800000", label="Outside", zorder=2)
+                except Exception:
+                     pass
+
+                # Plot Tapak Boundary (Optional, to ensure all boundaries are visible)
+                gdf_tapak_3857_plot.plot(ax=ax, facecolor="none", edgecolor="#FF0000", linewidth=1.5, linestyle='--', zorder=3)
+
+
+            if gdf_points is not None: gdf_points.to_crs(epsg=3857).plot(ax=ax, color="#FFA500", edgecolor="#000000", markersize=30, zorder=4)
+            
+            # Basemap ESRI untuk peta statis (Matplotlib/Contextily)
             ctx.add_basemap(ax, crs="EPSG:3857", source=ctx.providers.Esri.WorldImagery)
+            
+            # Set limits with a 10% buffer
             ax.set_xlim(xmin - width * 0.1, xmax + width * 0.1)
             ax.set_ylim(ymin - height * 0.1, ymax + height * 0.1)
-            legend_elements = [mpatches.Patch(facecolor="none", edgecolor="#FFFF00", linewidth=2, label="Batas PKKPR")]
-            if gdf_tapak is not None: legend_elements.append(mpatches.Patch(facecolor="#FF0000", edgecolor="#FF0000", alpha=0.5, label="Tapak Proyek"))
+            
+            # Legend Elements
+            legend_elements = [
+                mpatches.Patch(facecolor="none", edgecolor="#FFFF00", linewidth=2, label="Batas PKKPR"),
+            ]
+            if gdf_tapak is not None:
+                legend_elements.extend([
+                    mpatches.Patch(facecolor="#00FF00", edgecolor="#008000", alpha=0.6, label="Tapak Proyek (Overlap PKKPR)"),
+                    mpatches.Patch(facecolor="#FF0000", edgecolor="#800000", alpha=0.6, label="Tapak Proyek (Di Luar PKKPR)"),
+                    mlines.Line2D([], [], color="#FF0000", linestyle='--', linewidth=1.5, label="Batas Tapak Proyek"),
+                ])
             if gdf_points is not None: legend_elements.append(mlines.Line2D([], [], color="#FFA500", marker='o', markeredgecolor="black", linestyle='None', markersize=7, label="Titik PKKPR"))
+            
             ax.legend(handles=legend_elements, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9, framealpha=0.9)
             ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
             ax.set_axis_off()
+            
             png_buffer = io.BytesIO()
             plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight", pad_inches=0.1)
             plt.close(fig)
             png_buffer.seek(0)
+            
             st.image(png_buffer, caption="Preview Layout Peta")
             st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta_pkkpr.png", mime="image/png", use_container_width=True)
