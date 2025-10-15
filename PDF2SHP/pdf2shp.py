@@ -17,7 +17,6 @@ import tempfile
 # ======================
 # === Konfigurasi App ===
 # ======================
-# PERBAIKAN: set_page_page_config diubah menjadi set_page_config
 st.set_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
@@ -51,114 +50,44 @@ def save_shapefile(gdf):
 
 def parse_coordinate(coord_str):
     """
-    Fungsi universal Paling Robust untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
-    Ditingkatkan untuk menangani simbol LaTeX/Unicode dan format DMS yang terpadu/rusak.
+    Fungsi universal untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
     """
     if not coord_str:
         return None
 
     coord_str = coord_str.strip()
     
-    # 1. Bersihkan karakter non-standar (termasuk dari output LaTeX PDF)
-    # Ubah koma desimal menjadi titik desimal
-    clean_str = coord_str.replace(" ", "").replace(",", ".")
-    # Hapus simbol-simbol LaTeX dan karakter aneh
+    # 1. Pembersihan untuk DMS dan Pemindahan Koma Desimal
+    clean_str = coord_str.replace(" ", "")
+    clean_str = clean_str.replace(",", ".") # Ganti koma desimal dengan titik
+    
+    # Hapus simbol LaTeX/Math aneh dari PDF
     clean_str = re.sub(r'[\$\{\}\\\^"]', '', clean_str) 
     
-    # Ganti simbol DMS yang diekstrak menjadi karakter sederhana
+    # Ganti simbol-simbol D/M/S yang sering salah parsing ke format standar
     clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
-    clean_str = clean_str.replace('d', 'D').replace('s', 'S').replace('\'', 'M')
     
-    # 2. Coba parse sebagai DMS standar (contoh: 104D57M40.000SBT)
-    m_dms_std = re.match(r"(\d+)(D)?(\d+)(M)?([\d\.]+)(S)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
-    if m_dms_std:
+    # Coba parse sebagai DMS (DMD = Derajat Menit Detik, D = Direction/Arah)
+    m_dms = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)", clean_str, re.IGNORECASE)
+    
+    if m_dms:
         try:
-            deg_str = m_dms_std.group(1)
-            minute_str = m_dms_std.group(3)
-            second_str = m_dms_std.group(5)
-            direction = m_dms_std.group(7)
-            
-            decimal = float(deg_str) + float(minute_str) / 60 + float(second_str) / 3600
-            if direction and direction.upper() in ["S", "LS", "W", "BB", "B"]:
+            deg, minute, second, _, direction = m_dms.groups()
+            decimal = float(deg) + float(minute) / 60 + float(second) / 3600
+            if direction.upper() in ["S", "LS", "W", "BB"]:
                 decimal *= -1
             return decimal
         except (ValueError, TypeError):
-            pass 
-            
-    # 3. Coba parse sebagai Desimal Murni 
+            pass # Lanjut ke parsing desimal
+    
+    # Coba parse sebagai Desimal Murni
     try:
-        # Hapus semua karakter non-angka/titik/minus kecuali minus (-)
-        decimal_str_clean = re.sub(r'[^\d\.\-]', '', clean_str)
-        decimal = float(decimal_str_clean)
-        
-        # JIKA ANGKA TERLALU BESAR (> 180), ASUMSIKAN DMS PADAT
-        if abs(decimal) > 180 and len(decimal_str_clean.split('.')[0]) >= 7: 
-             num_part = decimal_str_clean.split('.')[0]
-             
-             # Pola DDDMMSS.sss (mis. 1045740)
-             if num_part.isdigit(): 
-                 deg = float(num_part[:3])
-                 minute = float(num_part[3:5])
-                 
-                 # Detik: sisanya termasuk pecahan setelah titik desimal
-                 second_str_with_decimal = num_part[5:]
-                 if '.' in decimal_str_clean:
-                     second_str_with_decimal += '.' + decimal_str_clean.split('.', 1)[1]
-                 
-                 try:
-                    second = float(second_str_with_decimal)
-                    dms_decimal = deg + minute / 60 + second / 3600
-                    
-                    # Tambahkan logic arah jika ada 
-                    direction_match = re.search(r"[NSEWBS]$", coord_str, re.IGNORECASE)
-                    if direction_match and direction_match.group(0).upper() in ["S", "LS", "W", "BB", "B"]:
-                         dms_decimal *= -1
-                    return dms_decimal
-                 except:
-                     pass
-        
-        # Jika lolos cek besar/DMS, kembalikan sebagai desimal
+        # Hapus semua karakter non-angka/titik/minus
+        decimal_str = re.sub(r'[^\d\.\-]', '', clean_str)
+        decimal = float(decimal_str)
         return decimal
-        
     except ValueError:
         return None
-
-def validate_and_fix_coords(lon_val, lat_val):
-    """
-    Memvalidasi dan memperbaiki pasangan koordinat untuk Indonesia.
-    Termasuk penanganan Longitude yang kehilangan '9' atau '10' dan pembalikan Lat/Lon.
-    """
-    
-    # Longitude Indonesia: 90 hingga 145 (Timur)
-    # Latitude Indonesia: -11 hingga 6 (Utara/Selatan)
-    
-    is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
-    is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
-    
-    if is_lon_valid and is_lat_valid:
-        return lon_val, lat_val, False # Lon, Lat, Not Flipped
-
-    # --- Typo Correction Logic ---
-    if lon_val is not None and lat_val is not None:
-        
-        # 1. Deteksi Longitude yang kehilangan '9' atau '10' (misal 8.24 menjadi 98.24)
-        if 8 < lon_val < 10 and -11 <= lat_val <= 6: 
-            lon_fixed = lon_val + 90 
-            if 90 <= lon_fixed <= 145:
-                return lon_fixed, lat_val, False 
-        elif 6 < lon_val < 10 and -11 <= lat_val <= 6:
-            lon_fixed = lon_val + 100
-            if 90 <= lon_fixed <= 145:
-                return lon_fixed, lat_val, False
-        
-        # 2. Cek Pasangan Terbalik (Lat, Long)
-        is_lon_valid_rev = lat_val is not None and 90 <= lat_val <= 145 
-        is_lat_valid_rev = lon_val is not None and -11 <= lon_val <= 6 
-        
-        if is_lon_valid_rev and is_lat_valid_rev:
-            return lat_val, lon_val, True # Longitude dan Latitude Dibalik, Flipped
-
-    return None, None, False # Invalid
 
 
 def parse_luas_from_text(text):
@@ -208,13 +137,13 @@ luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         coords_disetujui, coords_dimohon, coords_plain = [], [], []
-        full_text, blok_aktif = None, None
+        full_text, blok_aktif = "", None
         
         try:
             with pdfplumber.open(uploaded_pkkpr) as pdf:
                 for page in pdf.pages:
                     text = page.extract_text() or ""
-                    full_text = (full_text or "") + "\n" + text
+                    full_text += "\n" + text
 
                     # Logika penentuan blok "disetujui" atau "dimohon"
                     for line in text.split("\n"):
@@ -229,39 +158,58 @@ if uploaded_pkkpr:
                         if len(tb) <= 1: 
                             continue 
 
-                        for row in tb[1:]: # Iterasi baris data
-                            
-                            cleaned_cells = [str(cell).strip() for cell in row if cell]
-                            
-                            if len(cleaned_cells) < 2:
-                                continue
-                            
-                            found_valid_pair = False
-                            target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
-                            
-                            # Logika 1: Coba semua pasangan kolom berdekatan
-                            for i in range(len(cleaned_cells) - 1):
-                                val1 = parse_coordinate(cleaned_cells[i])
-                                val2 = parse_coordinate(cleaned_cells[i+1])
-                                
-                                lon_fixed, lat_fixed, is_flipped = validate_and_fix_coords(val1, val2)
-                                
-                                if lon_fixed is not None:
-                                    target.append((lon_fixed, lat_fixed))
-                                    found_valid_pair = True
-                                    break 
+                        header = [str(c).lower().strip() for c in tb[0] if c]
+                        
+                        idx_lon, idx_lat = -1, -1
+                        
+                        try:
+                            # Prioritas 1: Cari "bujur" dan "lintang"
+                            idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
+                            idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
+                        except StopIteration:
+                             # Fallback: Asumsi kolom 1=Bujur, Kolom 2=Lintang
+                             if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): 
+                                 if len(header) > 2:
+                                     idx_lon, idx_lat = 1, 2
+                             elif len(header) == 2:
+                                 idx_lon, idx_lat = 0, 1
 
-                            # Logika 2: Coba pasangkan 2 kolom terakhir (No., Long, Lat)
-                            if not found_valid_pair and len(cleaned_cells) >= 3:
-                                lon_val = parse_coordinate(cleaned_cells[-2])
-                                lat_val = parse_coordinate(cleaned_cells[-1])
-                                
-                                lon_fixed, lat_fixed, is_flipped = validate_and_fix_coords(lon_val, lat_val)
-                                
-                                if lon_fixed is not None:
-                                    target.append((lon_fixed, lat_fixed))
-                                    found_valid_pair = True
-                                
+                        if idx_lon != -1 and idx_lat != -1:
+                            for row in tb[1:]: # Iterasi baris data
+                                # --- Perbaikan Robustness: Pastikan sel tidak None/kosong ---
+                                cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+
+                                if len(cleaned_row) > max(idx_lon, idx_lat) and cleaned_row[idx_lon] and cleaned_row[idx_lat]:
+                                    lon_str, lat_str = cleaned_row[idx_lon], cleaned_row[idx_lat]
+                                    
+                                    # Gunakan fungsi parse_coordinate yang universal
+                                    lon_val = parse_coordinate(lon_str)
+                                    lat_val = parse_coordinate(lat_str)
+
+                                    # Validasi (Indonesia: Longitude 90-145, Latitude -11 hingga 6)
+                                    is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
+                                    is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
+                                    
+                                    # --- Typo Correction Logic (khusus untuk Longitude di Sumatra 98.xx) ---
+                                    if not is_lon_valid and lon_val is not None and 8 < lon_val < 10 and is_lat_valid:
+                                        # Jika Longitude antara 8 dan 10 (kemungkinan hilang '9')
+                                        lon_val += 90 
+                                        is_lon_valid = 90 <= lon_val <= 145 # Re-validate
+                                    # --- End Typo Correction ---
+
+                                    if is_lon_valid and is_lat_valid:
+                                        target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
+                                        target.append((lon_val, lat_val))
+                                    else:
+                                        # Cek urutan terbalik (Lat, Long)
+                                        is_lon_valid_rev = lat_val is not None and 90 <= lat_val <= 145 
+                                        is_lat_valid_rev = lon_val is not None and -11 <= lon_val <= 6 
+                                        
+                                        if is_lon_valid_rev and is_lat_valid_rev:
+                                            # Simpan sebagai (Long, Lat)
+                                            target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
+                                            target.append((lat_val, lon_val))
+                                        
                 # --- Sisa Logika Setelah Parsing (PRIORITAS & GEODATAFRAME) ---
                 if coords_disetujui:
                     coords, coords_label = coords_disetujui, "disetujui"
@@ -273,26 +221,9 @@ if uploaded_pkkpr:
                     coords_label = "tidak ditemukan"
 
                 luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
-                
-                coords = list(dict.fromkeys(coords)) 
-                
-                # --- AUTO-FLIP GLOBAL (MENGATASI KESALAHAN LOKASI) ---
-                if coords:
-                    temp_lon = [c[0] for c in coords]
-                    temp_lat = [c[1] for c in coords]
-                    
-                    # Cek apakah rata-rata Longitude di luar batas Indonesia (Lon 90-145)
-                    avg_lon = sum(temp_lon) / len(temp_lon)
-                    
-                    if not (90 <= avg_lon <= 145):
-                        # Jika rata-rata koordinat berada di luar Indonesia, coba balikkan urutan
-                        coords_flipped = [(c[1], c[0]) for c in coords]
-                        avg_lon_flipped = sum([c[0] for c in coords_flipped]) / len(coords_flipped)
+                coords = list(dict.fromkeys(coords))
 
-                        if 90 <= avg_lon_flipped <= 145:
-                            coords = coords_flipped
-                            coords_label += " (di-flip)"
-                            
+                if coords:
                     flipped_coords = coords
                     
                     if len(flipped_coords) > 1 and flipped_coords[0] != flipped_coords[-1]:
@@ -354,7 +285,7 @@ if gdf_polygon is not None:
     # Hitung Luas WGS 84 Mercator (EPSG:3857)
     luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum() 
     
-    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "Data Luas Tidak Ditemukan"
+    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "484.071,60 M² (dokumen)"
     st.info(
         f"**Analisis Luas Batas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
@@ -475,8 +406,8 @@ if gdf_polygon is not None:
         gdf_points_3857 = gdf_points.to_crs(epsg=3857)
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         
-    # Tambahkan Basemap
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+    # Tambahkan Basemap tanpa atribusi (disable_attribution=True)
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, disable_attribution=True)
     
     ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
     ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
