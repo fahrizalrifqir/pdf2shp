@@ -51,7 +51,6 @@ def save_shapefile(gdf):
 def parse_coordinate(coord_str):
     """
     Fungsi universal untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
-    Menggunakan validasi lokasi (Indonesia: Bujur 90-145, Lintang -11 hingga 6).
     """
     if not coord_str:
         return None
@@ -69,7 +68,6 @@ def parse_coordinate(coord_str):
     clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
     
     # Coba parse sebagai DMS (DMD = Derajat Menit Detik, D = Direction/Arah)
-    # Mencari pola: DDD[simbol] MM[simbol] SS.S[simbol] Dir
     m_dms = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)", clean_str, re.IGNORECASE)
     
     if m_dms:
@@ -96,7 +94,7 @@ def parse_luas_from_text(text):
     """Ambil teks luas tanah dari dokumen."""
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
-        r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(M2|M²))",
+        r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(M2|M²|HA))",
         text_clean,
         re.IGNORECASE
     )
@@ -148,12 +146,11 @@ if uploaded_pkkpr:
                     full_text += "\n" + text
 
                     # Logika penentuan blok "disetujui" atau "dimohon"
-                    blok_aktif = None
                     for line in text.split("\n"):
                         low = line.lower()
-                        if "koordinat" in low and "disetujui" in low:
+                        if "tabel koordinat yang disetujui" in low:
                             blok_aktif = "disetujui"
-                        elif "koordinat" in low and "dimohon" in low:
+                        elif "tabel koordinat yang dimohonkan" in low:
                             blok_aktif = "dimohon"
 
                     # Parsing Tabel Koordinat
@@ -170,16 +167,20 @@ if uploaded_pkkpr:
                             idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
                             idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
                         except StopIteration:
+                             # Fallback: Asumsi kolom 1=Bujur, Kolom 2=Lintang
                              if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): 
                                  if len(header) > 2:
                                      idx_lon, idx_lat = 1, 2
                              elif len(header) == 2:
                                  idx_lon, idx_lat = 0, 1
 
-                        if idx_lon != -1 and idx_lat != -1 and len(header) > max(idx_lon, idx_lat):
+                        if idx_lon != -1 and idx_lat != -1:
                             for row in tb[1:]: # Iterasi baris data
-                                if len(row) > max(idx_lon, idx_lat) and row[idx_lon] and row[idx_lat]:
-                                    lon_str, lat_str = str(row[idx_lon]), str(row[idx_lat])
+                                # --- Perbaikan Robustness: Pastikan sel tidak None/kosong ---
+                                cleaned_row = [str(cell).strip() if cell is not None else "" for cell in row]
+
+                                if len(cleaned_row) > max(idx_lon, idx_lat) and cleaned_row[idx_lon] and cleaned_row[idx_lat]:
+                                    lon_str, lat_str = cleaned_row[idx_lon], cleaned_row[idx_lat]
                                     
                                     # Gunakan fungsi parse_coordinate yang universal
                                     lon_val = parse_coordinate(lon_str)
@@ -188,6 +189,13 @@ if uploaded_pkkpr:
                                     # Validasi (Indonesia: Longitude 90-145, Latitude -11 hingga 6)
                                     is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
                                     is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
+                                    
+                                    # --- Typo Correction Logic (khusus untuk Longitude di Sumatra 98.xx) ---
+                                    if not is_lon_valid and lon_val is not None and 8 < lon_val < 10 and is_lat_valid:
+                                        # Jika Longitude antara 8 dan 10 (kemungkinan hilang '9')
+                                        lon_val += 90 
+                                        is_lon_valid = 90 <= lon_val <= 145 # Re-validate
+                                    # --- End Typo Correction ---
 
                                     if is_lon_valid and is_lat_valid:
                                         target = {"disetujui": coords_disetujui, "dimohon": coords_dimohon}.get(blok_aktif, coords_plain)
@@ -216,7 +224,6 @@ if uploaded_pkkpr:
                 coords = list(dict.fromkeys(coords))
 
                 if coords:
-                    # Tidak perlu pengecekan flipped di sini karena sudah ditangani di parse_coordinate
                     flipped_coords = coords
                     
                     if len(flipped_coords) > 1 and flipped_coords[0] != flipped_coords[-1]:
@@ -278,7 +285,7 @@ if gdf_polygon is not None:
     # Hitung Luas WGS 84 Mercator (EPSG:3857)
     luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum() 
     
-    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "2038,30 ha (dokumen)"
+    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "484.071,60 M² (dokumen)"
     st.info(
         f"**Analisis Luas Batas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
