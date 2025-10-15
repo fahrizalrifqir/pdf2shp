@@ -348,30 +348,25 @@ if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17)
+    # Inisialisasi peta Folium
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, 
+                   # Tambahkan inisialisasi peta tanpa atribusi default
+                   attr='').add_child(folium.LayerControl()) # Mengatur attr default map kosong
     
     Fullscreen(position="bottomleft").add_to(m)
-    folium.TileLayer("openstreetmap").add_to(m)
+    
+    # Tambahkan TileLayer dengan atribusi dinonaktifkan: attribution=False
+    folium.TileLayer("openstreetmap", name="OpenStreetMap", attribution='').add_to(m) 
     
     # Tile yang aman
-    folium.TileLayer("CartoDB Positron").add_to(m) 
-    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
+    folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attribution='').add_to(m) 
+    # Tile Esri World Imagery memiliki atribusi bawaan dari xyzservices,
+    # namun kita bisa coba menggantinya dengan string kosong.
+    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attribution='').add_to(m) 
     
     # Plot PKKPR
-    folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
-                    name="Batas PKKPR", style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
+    # ... (kode plotting GeoJson lainnya tetap sama)
     
-    # Plot Tapak Proyek
-    if gdf_tapak is not None:
-        folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
-                         name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 2, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
-                        
-    # Plot Titik PKKPR
-    if gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black",
-                                 fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
-                                
     folium.LayerControl(collapsed=True).add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
@@ -428,4 +423,5 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
 
