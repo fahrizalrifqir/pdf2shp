@@ -337,8 +337,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
         "**HASIL ANALISIS OVERLAY TAPAK PROYEK:**\n"
         f"- Total Luas Tapak Proyek (UTM {utm_zone}): **{format_angka_id(luas_tapak_utm)} m²**\n"
         f"- Total Luas Tapak Proyek (WGS 84 Mercator/EPSG:3857): **{format_angka_id(luas_tapak_mercator)} m²**\n"
-        f"- Luas Tapak di dalam PKKPR (Overlap): **{format_angka_id(luas_overlap)} m²**\n"
-        f"- Luas Tapak di luar PKKPR (Outside): **{format_angka_id(luas_outside)} m²**\n"
+        f"- Luas Tapak di dalam PKKPR UTM (Overlap): **{format_angka_id(luas_overlap)} m²**\n"
+        f"- Luas Tapak di luar PKKPR UTM (Outside): **{format_angka_id(luas_outside)} m²**\n"
     )
     st.markdown("---")
 
@@ -428,3 +428,4 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
