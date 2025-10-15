@@ -17,7 +17,7 @@ import tempfile
 # ======================
 # === Konfigurasi App ===
 # ======================
-st.set_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
+st.set_page_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
@@ -51,41 +51,44 @@ def save_shapefile(gdf):
 def parse_coordinate(coord_str):
     """
     Fungsi universal Paling Robust untuk mengkonversi string koordinat (DMS atau Desimal) ke nilai float desimal.
-    Fokus pada penanganan format DMS yang tidak baku/terpadu.
+    Ditingkatkan untuk menangani simbol LaTeX/Unicode dan format DMS yang terpadu/rusak.
     """
     if not coord_str:
         return None
 
     coord_str = coord_str.strip()
+    
+    # 1. Bersihkan karakter non-standar (termasuk dari output LaTeX PDF)
     clean_str = coord_str.replace(" ", "").replace(",", ".")
     clean_str = re.sub(r'[\$\{\}\\\^"]', '', clean_str) 
-    clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
     
-    # 1. Coba parse sebagai DMS standar (contoh: 104d57'40.000sBT)
-    m_dms_std = re.match(r"(\d+)d?(\d+)'([\d\.]+)(s)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
+    # Ganti simbol DMS yang diekstrak
+    clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
+    clean_str = clean_str.replace('d', 'D').replace('s', 'S')
+    
+    # 2. Coba parse sebagai DMS standar (contoh: 104D57'40.000SBT atau 104 57 40)
+    m_dms_std = re.match(r"(\d+)(D)?(\d+)'([\d\.]+)(S)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
     if m_dms_std:
         try:
-            deg, minute, second, _, direction = m_dms_std.groups()
-            decimal = float(deg) + float(minute) / 60 + float(second) / 3600
-            # Handle direction (S, W, LS, BB)
-            if direction and direction.upper() in ["S", "LS", "W", "BB"]:
+            deg_str, _, minute_str, second_str, _, direction = m_dms_std.groups()
+            decimal = float(deg_str) + float(minute_str) / 60 + float(second_str) / 3600
+            if direction and direction.upper() in ["S", "LS", "W", "BB", "B"]: # 'B' untuk Bujur Barat
                 decimal *= -1
             return decimal
         except (ValueError, TypeError):
             pass 
             
-    # 2. Coba parse sebagai Desimal Murni (contoh: 98.24312 atau -2.6378)
+    # 3. Coba parse sebagai Desimal Murni 
     try:
-        # Hapus semua karakter non-angka/titik/minus kecuali minus (-)
         decimal_str_clean = re.sub(r'[^\d\.\-]', '', clean_str)
         decimal = float(decimal_str_clean)
         
-        # Jika angka ini sangat besar (> 180), kemungkinan besar itu adalah DMS tanpa pemisah (contoh: 1045740.000)
+        # JIKA ANGKA TERLALU BESAR (> 180), ASUMSIKAN DMS PADAT
         if abs(decimal) > 180: 
-             # Coba paksa interpretasi DMS (DDDMMSS.sss atau DDMMSS.sss)
              num_part = decimal_str_clean.split('.')[0]
              
-             if len(num_part) >= 7 and num_part.isdigit(): # Pola DDDMMSS (mis. 1045740)
+             # Pola DDDMMSS.sss (mis. 1045740)
+             if len(num_part) >= 7 and num_part.isdigit(): 
                  deg = float(num_part[:3])
                  minute = float(num_part[3:5])
                  
@@ -96,14 +99,13 @@ def parse_coordinate(coord_str):
                  
                  try:
                     second = float(second_str_with_decimal)
+                    dms_decimal = deg + minute / 60 + second / 3600
                     
-                    if 0 <= deg <= 180 and 0 <= minute <= 60:
-                        # Tambahkan logic arah jika ada (contoh: 1045740.000BT)
-                        direction_match = re.search(r"[NSEWBS]$", coord_str, re.IGNORECASE)
-                        dms_decimal = deg + minute / 60 + second / 3600
-                        if direction_match and direction_match.group(0).upper() in ["S", "LS", "W", "BB"]:
-                             dms_decimal *= -1
-                        return dms_decimal
+                    # Tambahkan logic arah jika ada 
+                    direction_match = re.search(r"[NSEWBS]$", coord_str, re.IGNORECASE)
+                    if direction_match and direction_match.group(0).upper() in ["S", "LS", "W", "BB", "B"]:
+                         dms_decimal *= -1
+                    return dms_decimal
                  except:
                      pass
         
@@ -111,27 +113,16 @@ def parse_coordinate(coord_str):
         return decimal
         
     except ValueError:
-        pass
-        
-    # 3. Coba parse sebagai DMS yang sangat padat tanpa simbol (jika desimal murni gagal)
-    # Ini adalah upaya terakhir jika semua gagal.
-    if len(clean_str.split('.')[0]) >= 7:
-        try:
-            num_str = clean_str.split('.')[0]
-            # Pola: DDDMMSS (3-2-2)
-            deg = float(num_str[:3])
-            minute = float(num_str[3:5])
-            second = float(num_str[5:7]) if len(num_str) >= 7 else 0
-            
-            if 0 <= deg <= 180 and 0 <= minute <= 60:
-                 return deg + minute / 60 + second / 3600
-        except:
-             pass
-
-    return None
+        return None
 
 def validate_and_fix_coords(lon_val, lat_val):
-    """Memvalidasi dan memperbaiki pasangan koordinat untuk Indonesia."""
+    """
+    Memvalidasi dan memperbaiki pasangan koordinat untuk Indonesia.
+    Termasuk penanganan Longitude yang kehilangan '9' atau '10' dan pembalikan Lat/Lon.
+    """
+    
+    # Longitude Indonesia: 90 hingga 145 (Timur)
+    # Latitude Indonesia: -11 hingga 6 (Utara/Selatan)
     
     is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
     is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
@@ -139,10 +130,10 @@ def validate_and_fix_coords(lon_val, lat_val):
     if is_lon_valid and is_lat_valid:
         return lon_val, lat_val, False # Lon, Lat, Not Flipped
 
-    # --- Typo Correction Logic (Kehilangan digit di Longitude) ---
+    # --- Typo Correction Logic ---
     if lon_val is not None and lat_val is not None:
         
-        # 1. Deteksi Longitude yang kehilangan digit '9' atau '10'
+        # 1. Deteksi Longitude yang kehilangan '9' atau '10' (misal 8.24 menjadi 98.24)
         if 8 < lon_val < 10 and -11 <= lat_val <= 6: 
             lon_fixed = lon_val + 90 
             if 90 <= lon_fixed <= 145:
@@ -164,6 +155,7 @@ def validate_and_fix_coords(lon_val, lat_val):
 
 def parse_luas_from_text(text):
     """Ambil teks luas tanah dari dokumen."""
+    # (Fungsi ini tidak diubah karena tidak relevan dengan masalah koordinat)
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
         r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(M2|M²|HA))",
@@ -355,7 +347,7 @@ if gdf_polygon is not None:
     # Hitung Luas WGS 84 Mercator (EPSG:3857)
     luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum() 
     
-    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "484.071,60 M² (dokumen)"
+    luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "Data Luas Tidak Ditemukan"
     st.info(
         f"**Analisis Luas Batas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
@@ -375,7 +367,7 @@ gdf_tapak = None
 if uploaded_tapak:
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
-            zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), 'r')
+            zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()), 'r')
             zip_ref.extractall(temp_dir)
             zip_ref.close()
             
