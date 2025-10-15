@@ -82,7 +82,7 @@ def parse_coordinate(coord_str):
     
     # Coba parse sebagai Desimal Murni
     try:
-        # Hapus semua karakter non-angka/titik/minus
+        # Hapus semua karakter non-angka/titik/minus kecuali minus (-)
         decimal_str = re.sub(r'[^\d\.\-]', '', clean_str)
         decimal = float(decimal_str)
         return decimal
@@ -167,7 +167,7 @@ if uploaded_pkkpr:
                             idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
                             idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
                         except StopIteration:
-                             # Fallback: Asumsi kolom 1=Bujur, Kolom 2=Lintang
+                             # Fallback: Asumsi kolom 1=Bujur, Kolom 2=Lintang (setelah kolom Nomor)
                              if len(header) >= 3 and any(h in header for h in ["no.", "nomor"]): 
                                  if len(header) > 2:
                                      idx_lon, idx_lat = 1, 2
@@ -186,15 +186,20 @@ if uploaded_pkkpr:
                                     lon_val = parse_coordinate(lon_str)
                                     lat_val = parse_coordinate(lat_str)
 
-                                    # Validasi (Indonesia: Longitude 90-145, Latitude -11 hingga 6)
+                                    # Validasi Awal (Indonesia: Longitude 90-145, Latitude -11 hingga 6)
                                     is_lon_valid = lon_val is not None and 90 <= lon_val <= 145
                                     is_lat_valid = lat_val is not None and -11 <= lat_val <= 6
                                     
-                                    # --- Typo Correction Logic (khusus untuk Longitude di Sumatra 98.xx) ---
-                                    if not is_lon_valid and lon_val is not None and 8 < lon_val < 10 and is_lat_valid:
-                                        # Jika Longitude antara 8 dan 10 (kemungkinan hilang '9')
-                                        lon_val += 90 
-                                        is_lon_valid = 90 <= lon_val <= 145 # Re-validate
+                                    # --- Typo Correction Logic (khusus Longitude di Sumatra) ---
+                                    if not is_lon_valid and lon_val is not None:
+                                        # Longitude Sumatra sering typo (misalnya 8.xx padahal 98.xx)
+                                        if 8 < lon_val < 10 and is_lat_valid:
+                                            lon_val += 90 
+                                            is_lon_valid = 90 <= lon_val <= 145 # Re-validate
+                                        # Longitude Jawa sering typo (misalnya 6.xx padahal 106.xx)
+                                        elif 6 < lon_val < 10 and is_lat_valid:
+                                            lon_val += 100 
+                                            is_lon_valid = 90 <= lon_val <= 145 # Re-validate
                                     # --- End Typo Correction ---
 
                                     if is_lon_valid and is_lat_valid:
@@ -221,7 +226,7 @@ if uploaded_pkkpr:
                     coords_label = "tidak ditemukan"
 
                 luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
-                coords = list(dict.fromkeys(coords))
+                coords = list(dict.fromkeys(coords)) # Menghapus duplikat koordinat
 
                 if coords:
                     flipped_coords = coords
