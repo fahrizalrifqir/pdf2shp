@@ -37,8 +37,7 @@ def save_shapefile(gdf):
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for file in os.listdir(temp_dir):
-                file_path = os.path.join(temp_dir, file)
-                zf.write(file_path, arcname=file)
+                zf.write(os.path.join(temp_dir, file), arcname=file)
         zip_buffer.seek(0)
         return zip_buffer.read()
 
@@ -97,83 +96,99 @@ col1, col2 = st.columns([0.7, 0.3])
 with col1:
     uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-coords_all = {"disetujui": [], "dimohon": [], "lainnya": []}
 coords_final, gdf_points, gdf_polygon = [], None, None
 luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
-        full_text, blok_aktif = "", None
+        full_text = ""
+        coords_by_type = {"disetujui": [], "dimohon": [], "lainnya": []}
+        found_priority = None
 
         try:
-            with pdfplumber.open(uploaded_pkkpr) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    full_text += "\n" + text
+            with st.spinner("🔍 Membaca dan mengekstrak koordinat dari PDF..."):
+                with pdfplumber.open(uploaded_pkkpr) as pdf:
+                    for page in pdf.pages:
+                        text = page.extract_text() or ""
+                        full_text += "\n" + text
+                        low = text.lower()
 
-                    for line in text.split("\n"):
-                        low = line.lower()
+                        # Tentukan blok aktif
+                        blok_aktif = None
                         if "koordinat" in low and "disetujui" in low:
                             blok_aktif = "disetujui"
                         elif "koordinat" in low and "dimohon" in low:
                             blok_aktif = "dimohon"
 
-                    # Baca tabel koordinat di halaman
-                    for tb in (page.extract_tables() or []):
-                        if len(tb) <= 1:
+                        # Jika sudah pernah dapat "disetujui", tidak perlu baca lainnya
+                        if found_priority == "disetujui":
                             continue
 
-                        header = [str(c).lower().strip() for c in tb[0] if c]
-                        idx_lon, idx_lat = -1, -1
-
-                        # Coba deteksi kolom longitude/latitude
-                        try:
-                            idx_lon = next(i for i, h in enumerate(header) if "bujur" in h or "longitude" in h)
-                            idx_lat = next(i for i, h in enumerate(header) if "lintang" in h or "latitude" in h)
-                        except StopIteration:
-                            if len(header) >= 3 and any("no" in h for h in header):
-                                idx_lon, idx_lat = 1, 2
-                            elif len(header) == 2:
-                                idx_lon, idx_lat = 0, 1
-
-                        if idx_lon == -1 or idx_lat == -1:
-                            continue
-
-                        for row in tb[1:]:
-                            if len(row) <= max(idx_lon, idx_lat):
+                        for tb in (page.extract_tables() or []):
+                            if len(tb) <= 1:
                                 continue
-                            lon_str = str(row[idx_lon]).strip().replace(",", ".")
-                            lat_str = str(row[idx_lat]).strip().replace(",", ".")
+
+                            header = [str(c).lower().strip() for c in tb[0] if c]
+                            idx_lon, idx_lat = -1, -1
+
+                            # deteksi kolom
                             try:
-                                lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
-                                lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
-                            except:
+                                idx_lon = next(i for i, h in enumerate(header) if "bujur" in h)
+                                idx_lat = next(i for i, h in enumerate(header) if "lintang" in h)
+                            except StopIteration:
+                                if len(header) >= 3 and any("no" in h for h in header):
+                                    idx_lon, idx_lat = 1, 2
+                                elif len(header) == 2:
+                                    idx_lon, idx_lat = 0, 1
+
+                            if idx_lon == -1 or idx_lat == -1:
                                 continue
 
-                            # Validasi batas wilayah Indonesia
-                            if 90 <= lon_val <= 145 and -11 <= lat_val <= 6:
+                            for row in tb[1:]:
+                                if len(row) <= max(idx_lon, idx_lat):
+                                    continue
+                                row_join = " ".join([str(x) for x in row if x]).strip()
+                                if not re.search(r"\d+\.\d+", row_join):
+                                    continue
+
+                                lon_str = str(row[idx_lon]).replace(",", ".").strip()
+                                lat_str = str(row[idx_lat]).replace(",", ".").strip()
+                                try:
+                                    lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
+                                    lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
+                                except:
+                                    continue
+                                if not (90 <= lon_val <= 145 and -11 <= lat_val <= 6):
+                                    continue
+
+                                # Tentukan target blok
                                 target = "lainnya"
                                 if blok_aktif == "disetujui":
                                     target = "disetujui"
                                 elif blok_aktif == "dimohon":
                                     target = "dimohon"
-                                coords_all[target].append((lon_val, lat_val))
 
-            # Tentukan prioritas hasil
-            if coords_all["disetujui"]:
-                coords_final = coords_all["disetujui"]
-                coords_label = "disetujui"
-            elif coords_all["dimohon"]:
-                coords_final = coords_all["dimohon"]
-                coords_label = "dimohon"
+                                coords_by_type[target].append((lon_val, lat_val))
+
+                        # Tentukan prioritas yang sudah ditemukan
+                        if coords_by_type["disetujui"]:
+                            found_priority = "disetujui"
+                        elif not found_priority and coords_by_type["dimohon"]:
+                            found_priority = "dimohon"
+                        elif not found_priority and coords_by_type["lainnya"]:
+                            found_priority = "lainnya"
+
+            # Ambil sesuai prioritas
+            if found_priority:
+                coords_final = coords_by_type[found_priority]
+                coords_label = found_priority
             else:
-                coords_final = coords_all["lainnya"]
-                coords_label = "ditemukan (tanpa judul)"
+                coords_label = "tidak ditemukan"
 
             luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
 
             if coords_final:
-                # Tutup poligon (auto-close)
+                # Tutup poligon
                 if coords_final[0] != coords_final[-1]:
                     coords_final.append(coords_final[0])
 
@@ -185,10 +200,7 @@ if uploaded_pkkpr:
                 gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords_final)], crs="EPSG:4326")
 
             with col2:
-                st.markdown(
-                    f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords_final)} titik ({coords_label})</p>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords_final)} titik ({coords_label})</p>", unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
@@ -200,13 +212,11 @@ if uploaded_pkkpr:
                 zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), "r")
                 zip_ref.extractall(temp_dir)
                 zip_ref.close()
-
                 gdf_polygon = gpd.read_file(temp_dir)
                 if gdf_polygon.crs is None:
                     gdf_polygon.set_crs(epsg=4326, inplace=True)
-
                 with col2:
-                    st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ Shapefile (PKKPR)</p>", unsafe_allow_html=True)
+                    st.markdown("<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ Shapefile (PKKPR)</p>", unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
             gdf_polygon = None
@@ -229,7 +239,7 @@ if gdf_polygon is not None:
         f"**Analisis Luas Batas PKKPR**:\n"
         f"- Luas PKKPR (dokumen): **{luas_doc_str}**\n"
         f"- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n"
-        f"- Luas PKKPR (WGS 84 Mercator/EPSG:3857): **{format_angka_id(luas_pkkpr_mercator)} m²**"
+        f"- Luas PKKPR (WGS84 Mercator): **{format_angka_id(luas_pkkpr_mercator)} m²**"
     )
     st.markdown("---")
 
@@ -249,7 +259,7 @@ if uploaded_tapak:
             if gdf_tapak.crs is None:
                 gdf_tapak.set_crs(epsg=4326, inplace=True)
             with col2:
-                st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
+                st.markdown("<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅</p>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
 
@@ -258,7 +268,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     gdf_tapak_utm, gdf_polygon_utm = gdf_tapak.to_crs(epsg=utm_epsg), gdf_polygon.to_crs(epsg=utm_epsg)
-    luas_tapak_utm, luas_pkkpr = gdf_tapak_utm.area.sum(), gdf_polygon_utm.area.sum()
+    luas_tapak_utm = gdf_tapak_utm.area.sum()
     luas_overlap = gdf_tapak_utm.overlay(gdf_polygon_utm, how="intersection").area.sum()
     luas_outside = luas_tapak_utm - luas_overlap
 
@@ -315,3 +325,4 @@ if gdf_polygon is not None:
     plt.close(fig)
     png_buffer.seek(0)
     st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
+
