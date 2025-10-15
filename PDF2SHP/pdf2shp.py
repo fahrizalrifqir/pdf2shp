@@ -206,7 +206,7 @@ if uploaded_pkkpr:
                 elif coords_dimohon:
                     coords, coords_label = coords_dimohon, "dimohon"
                 elif coords_plain:
-                    coords, coords_label = coords_plain, "titik unik ditemukan"
+                    coords, coords_label = coords_plain, "ditemukan"
                 else:
                     coords_label = "tidak ditemukan"
 
@@ -433,4 +433,5 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
 
