@@ -131,43 +131,50 @@ if uploaded_pkkpr:
                         else:
                             blok_aktif = "lainnya"
 
-                        for tb in (page.extract_tables() or []):
-                            if len(tb) <= 1:
-                                continue
-                            header = [str(c).lower().strip() for c in tb[0] if c]
-                            idx_lon, idx_lat = -1, -1
-                            try:
-                                idx_lon = next(i for i, h in enumerate(header) if "bujur" in h)
-                                idx_lat = next(i for i, h in enumerate(header) if "lintang" in h)
-                            except StopIteration:
-                                if len(header) >= 3 and any("no" in h for h in header):
-                                    idx_lon, idx_lat = 1, 2
-                                elif len(header) == 2:
-                                    idx_lon, idx_lat = 0, 1
-
-                            if idx_lon == -1 or idx_lat == -1:
-                                continue
-
-                            for row in tb[1:]:
-                                if len(row) <= max(idx_lon, idx_lat):
+                        # --- Coba baca tabel terstruktur dulu ---
+                        tables = page.extract_tables()
+                        if tables:
+                            for tb in tables:
+                                if len(tb) <= 1:
                                     continue
-                                row_join = " ".join([str(x) for x in row if x]).strip()
-                                if not re.search(r"\d+\.\d+", row_join):
-                                    continue  # skip header/footer
-
-                                lon_str = str(row[idx_lon]).replace(",", ".").strip()
-                                lat_str = str(row[idx_lat]).replace(",", ".").strip()
+                                header = [str(c).lower().strip() for c in tb[0] if c]
+                                idx_lon, idx_lat = -1, -1
                                 try:
-                                    lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
-                                    lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
-                                except:
+                                    idx_lon = next(i for i, h in enumerate(header) if "bujur" in h)
+                                    idx_lat = next(i for i, h in enumerate(header) if "lintang" in h)
+                                except StopIteration:
+                                    if len(header) >= 3 and any("no" in h for h in header):
+                                        idx_lon, idx_lat = 1, 2
+                                    elif len(header) == 2:
+                                        idx_lon, idx_lat = 0, 1
+                                if idx_lon == -1 or idx_lat == -1:
                                     continue
-                                if not (90 <= lon_val <= 145 and -11 <= lat_val <= 6):
-                                    continue
+                                for row in tb[1:]:
+                                    if len(row) <= max(idx_lon, idx_lat):
+                                        continue
+                                    row_join = " ".join([str(x) for x in row if x]).strip()
+                                    if not re.search(r"\d+\.\d+", row_join):
+                                        continue
+                                    lon_str = str(row[idx_lon]).replace(",", ".").strip()
+                                    lat_str = str(row[idx_lat]).replace(",", ".").strip()
+                                    try:
+                                        lon_val = float(re.sub(r"[^\d\.\-]", "", lon_str))
+                                        lat_val = float(re.sub(r"[^\d\.\-]", "", lat_str))
+                                    except:
+                                        continue
+                                    if not (90 <= lon_val <= 145 and -11 <= lat_val <= 6):
+                                        continue
+                                    coords_by_type[blok_aktif].append((lon_val, lat_val))
+                        else:
+                            # --- Jika tabel gagal, fallback baris per baris ---
+                            for line in text.split("\n"):
+                                nums = re.findall(r"(\d+\.\d+)", line.replace(",", "."))
+                                if len(nums) >= 2:
+                                    lon_val, lat_val = float(nums[0]), float(nums[1])
+                                    if 90 <= lon_val <= 145 and -11 <= lat_val <= 6:
+                                        coords_by_type[blok_aktif].append((lon_val, lat_val))
 
-                                coords_by_type[blok_aktif].append((lon_val, lat_val))
-
-            # Prioritas hasil: disetujui > dimohon > lainnya
+            # === Prioritas hasil ===
             if found_disetujui and coords_by_type["disetujui"]:
                 coords_final = coords_by_type["disetujui"]
                 coords_label = "disetujui"
@@ -214,7 +221,6 @@ if uploaded_pkkpr:
         except Exception as e:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
             gdf_polygon = None
-
 
 # ======================
 # === Analisis PKKPR ===
@@ -335,6 +341,7 @@ if gdf_polygon is not None:
     plt.close(fig)
     png_buffer.seek(0)
     st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
+
 
 
 
