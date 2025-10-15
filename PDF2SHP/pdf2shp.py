@@ -337,8 +337,8 @@ if gdf_polygon is not None and gdf_tapak is not None:
         "**HASIL ANALISIS OVERLAY TAPAK PROYEK:**\n"
         f"- Total Luas Tapak Proyek (UTM {utm_zone}): **{format_angka_id(luas_tapak_utm)} m²**\n"
         f"- Total Luas Tapak Proyek (WGS 84 Mercator/EPSG:3857): **{format_angka_id(luas_tapak_mercator)} m²**\n"
-        f"- Luas Tapak di dalam PKKPR UTM (Overlap): **{format_angka_id(luas_overlap)} m²**\n"
-        f"- Luas Tapak di luar PKKPR UTM (Outside): **{format_angka_id(luas_outside)} m²**\n"
+        f"- Luas Tapak di dalam PKKPR (Overlap): **{format_angka_id(luas_overlap)} m²**\n"
+        f"- Luas Tapak di luar PKKPR (Outside): **{format_angka_id(luas_outside)} m²**\n"
     )
     st.markdown("---")
 
@@ -348,25 +348,34 @@ if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    # Inisialisasi peta Folium
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, 
-                   # Tambahkan inisialisasi peta tanpa atribusi default
-                   attr='').add_child(folium.LayerControl()) # Mengatur attr default map kosong
+    
+    # Inisialisasi peta Folium dengan 'tiles=None' dan 'attr=''' untuk menghilangkan atribusi default
+    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, attr='').add_child(folium.LayerControl())
     
     Fullscreen(position="bottomleft").add_to(m)
     
-    # Tambahkan TileLayer dengan atribusi dinonaktifkan: attribution=False
+    # Tambahkan TileLayer dengan atribusi dinonaktifkan: attribution=''
     folium.TileLayer("openstreetmap", name="OpenStreetMap", attribution='').add_to(m) 
     
-    # Tile yang aman
+    # Tile yang aman (atribusi dinonaktifkan)
     folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attribution='').add_to(m) 
-    # Tile Esri World Imagery memiliki atribusi bawaan dari xyzservices,
-    # namun kita bisa coba menggantinya dengan string kosong.
     folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attribution='').add_to(m) 
     
     # Plot PKKPR
-    # ... (kode plotting GeoJson lainnya tetap sama)
+    folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
+                    name="Batas PKKPR", style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
     
+    # Plot Tapak Proyek
+    if gdf_tapak is not None:
+        folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
+                         name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 2, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+                        
+    # Plot Titik PKKPR
+    if gdf_points is not None:
+        for i, row in gdf_points.iterrows():
+            folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black",
+                                 fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
+                                
     folium.LayerControl(collapsed=True).add_to(m)
     st_folium(m, width=900, height=600)
     st.markdown("---")
@@ -423,5 +432,3 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
-
-
