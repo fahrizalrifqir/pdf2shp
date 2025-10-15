@@ -407,7 +407,7 @@ if gdf_polygon is not None:
         gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         
     # Tambahkan Basemap tanpa atribusi (disable_attribution=True)
-    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, disable_attribution=True)
+    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
     
     ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
     ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
@@ -434,3 +434,4 @@ if gdf_polygon is not None:
         "layout_peta.png", 
         mime="image/png"
     )
+
