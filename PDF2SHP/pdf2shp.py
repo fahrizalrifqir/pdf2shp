@@ -17,7 +17,8 @@ import tempfile
 # ======================
 # === Konfigurasi App ===
 # ======================
-st.set_page_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
+# PERBAIKAN: set_page_page_config diubah menjadi set_page_config
+st.set_page_config(page_title="PKKPR → SHP & Overlay", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
@@ -59,20 +60,26 @@ def parse_coordinate(coord_str):
     coord_str = coord_str.strip()
     
     # 1. Bersihkan karakter non-standar (termasuk dari output LaTeX PDF)
+    # Ubah koma desimal menjadi titik desimal
     clean_str = coord_str.replace(" ", "").replace(",", ".")
+    # Hapus simbol-simbol LaTeX dan karakter aneh
     clean_str = re.sub(r'[\$\{\}\\\^"]', '', clean_str) 
     
-    # Ganti simbol DMS yang diekstrak
+    # Ganti simbol DMS yang diekstrak menjadi karakter sederhana
     clean_str = clean_str.replace("'", "'").replace("°", "d").replace('"', "s")
-    clean_str = clean_str.replace('d', 'D').replace('s', 'S')
+    clean_str = clean_str.replace('d', 'D').replace('s', 'S').replace('\'', 'M')
     
-    # 2. Coba parse sebagai DMS standar (contoh: 104D57'40.000SBT atau 104 57 40)
-    m_dms_std = re.match(r"(\d+)(D)?(\d+)'([\d\.]+)(S)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
+    # 2. Coba parse sebagai DMS standar (contoh: 104D57M40.000SBT)
+    m_dms_std = re.match(r"(\d+)(D)?(\d+)(M)?([\d\.]+)(S)?([A-Za-z]+)?", clean_str, re.IGNORECASE)
     if m_dms_std:
         try:
-            deg_str, _, minute_str, second_str, _, direction = m_dms_std.groups()
+            deg_str = m_dms_std.group(1)
+            minute_str = m_dms_std.group(3)
+            second_str = m_dms_std.group(5)
+            direction = m_dms_std.group(7)
+            
             decimal = float(deg_str) + float(minute_str) / 60 + float(second_str) / 3600
-            if direction and direction.upper() in ["S", "LS", "W", "BB", "B"]: # 'B' untuk Bujur Barat
+            if direction and direction.upper() in ["S", "LS", "W", "BB", "B"]:
                 decimal *= -1
             return decimal
         except (ValueError, TypeError):
@@ -80,15 +87,16 @@ def parse_coordinate(coord_str):
             
     # 3. Coba parse sebagai Desimal Murni 
     try:
+        # Hapus semua karakter non-angka/titik/minus kecuali minus (-)
         decimal_str_clean = re.sub(r'[^\d\.\-]', '', clean_str)
         decimal = float(decimal_str_clean)
         
         # JIKA ANGKA TERLALU BESAR (> 180), ASUMSIKAN DMS PADAT
-        if abs(decimal) > 180: 
+        if abs(decimal) > 180 and len(decimal_str_clean.split('.')[0]) >= 7: 
              num_part = decimal_str_clean.split('.')[0]
              
              # Pola DDDMMSS.sss (mis. 1045740)
-             if len(num_part) >= 7 and num_part.isdigit(): 
+             if num_part.isdigit(): 
                  deg = float(num_part[:3])
                  minute = float(num_part[3:5])
                  
@@ -155,7 +163,6 @@ def validate_and_fix_coords(lon_val, lat_val):
 
 def parse_luas_from_text(text):
     """Ambil teks luas tanah dari dokumen."""
-    # (Fungsi ini tidak diubah karena tidak relevan dengan masalah koordinat)
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
         r"luas\s*tanah\s*yang\s*(dimohon|disetujui)\s*[:\-]?\s*([\d\.,]+\s*(M2|M²|HA))",
