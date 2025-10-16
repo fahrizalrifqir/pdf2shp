@@ -18,7 +18,7 @@ import tempfile
 # === Konfigurasi App ===
 # ======================
 st.set_page_config(page_title="PKKPR → SHP & Overlay (Robust)", layout="wide")
-st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek — Robust Parser")
+st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
 # Toggle debug untuk output tambahan
@@ -549,3 +549,4 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
