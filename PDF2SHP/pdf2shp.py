@@ -1,10 +1,9 @@
-# PKKPR → Shapefile Converter & Overlay Tapak Proyek (Versi Aman, Bahasa Indonesia)
-# Lengkap dengan validasi EPSG, fallback, debug, dan perbaikan otomatis geometri.
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, re, tempfile
 from shapely.geometry import Point, Polygon
+from shapely import affinity
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
@@ -15,7 +14,6 @@ import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
 import pyproj
-from shapely.geometry import mapping
 
 # ======================
 # === Konfigurasi App ===
@@ -235,8 +233,13 @@ def debug_and_fix_gdf_polygon(gdf, debug=DEBUG):
             try:
                 geom_union = gdf.unary_union
                 if geom_union is not None and not geom_union.is_empty:
-                    from shapely.validation import make_valid
-                    geom_valid = make_valid(geom_union)
+                    # make_valid ada di shapely.validation (Shapely >=1.8/2.0)
+                    try:
+                        from shapely.validation import make_valid
+                        geom_valid = make_valid(geom_union)
+                    except Exception:
+                        # fallback: gunakan unary_union langsung
+                        geom_valid = geom_union
                     if not geom_valid.is_empty and geom_valid.geom_type in ('Polygon', 'MultiPolygon'):
                         newg = gpd.GeoDataFrame(geometry=[geom_valid], crs=gdf.crs)
                         if debug: st.write("DEBUG: make_valid/unary_union berhasil membentuk polygon.")
@@ -300,6 +303,43 @@ def debug_and_fix_gdf_polygon(gdf, debug=DEBUG):
         if debug:
             st.write("DEBUG: error saat debug_and_fix_gdf_polygon:", e)
         return gdf, "error"
+
+
+# ======================
+# === Normalisasi Skala Jika Perlu ===
+# ======================
+def try_rescale_to_lonlat(gdf, debug=DEBUG):
+    """Coba bagi koordinat dengan factor 1,10,100,... sampai cocok sebagai lon/lat."""
+    if gdf is None or len(gdf) == 0:
+        return gdf, None
+    b = gdf.total_bounds
+    xmin, ymin, xmax, ymax = b
+    # Jika sudah wajar, langsung return
+    if (-180 <= xmin <= 180 and -90 <= ymin <= 90 and -180 <= xmax <= 180 and -90 <= ymax <= 90):
+        return gdf, None
+
+    for fac in [1, 10, 100, 1000, 10000, 100000]:
+        try:
+            g2 = gdf.copy()
+            # scale around origin (0,0) — pembagian koordinat
+            g2['geometry'] = g2['geometry'].apply(
+                lambda geom: affinity.scale(geom, xfact=1.0/fac, yfact=1.0/fac, origin=(0,0))
+            )
+            b2 = g2.total_bounds
+            xmin2, ymin2, xmax2, ymax2 = b2
+            # heuristik rentang untuk Indonesia
+            if (90 <= abs(xmin2) <= 145 and -11 <= ymin2 <= 6 and 90 <= abs(xmax2) <= 145 and -11 <= ymax2 <= 6) \
+               or (-180 <= xmin2 <= 180 and -90 <= ymin2 <= 90 and -180 <= xmax2 <= 180 and -90 <= ymax2 <= 90):
+                # terdeteksi cocok -> set CRS ke 4326 dan return
+                g2 = g2.set_crs(epsg=4326, allow_override=True)
+                if debug:
+                    st.write(f"DEBUG: Rescale berhasil dengan factor {fac}. New bounds: {b2}")
+                return g2, fac
+        except Exception as e:
+            if debug:
+                st.write(f"DEBUG: Rescale gagal factor {fac}: {e}")
+            continue
+    return gdf, None
 
 
 # ======================
@@ -410,6 +450,22 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
     gdf_polygon, fix_status = debug_and_fix_gdf_polygon(gdf_polygon, debug=DEBUG)
     if DEBUG:
         st.write("DEBUG: fix_status =", fix_status)
+
+    # Jika bounds tidak sesuai lon/lat normal, coba rescale otomatis
+    try:
+        b0 = gdf_polygon.total_bounds
+        if not (-180 <= b0[0] <= 180 and -90 <= b0[1] <= 90 and -180 <= b0[2] <= 180 and -90 <= b0[3] <= 90):
+            gdf_rescaled, fac = try_rescale_to_lonlat(gdf_polygon, debug=DEBUG)
+            if fac:
+                gdf_polygon = gdf_rescaled
+                if DEBUG:
+                    st.success(f"Auto-normalisasi skala: dibagi {fac} — CRS diset ke EPSG:4326.")
+            else:
+                if DEBUG:
+                    st.warning("Auto-normalisasi skala: tidak ditemukan faktor pembagi yang cocok.")
+    except Exception as e:
+        if DEBUG:
+            st.write("DEBUG: error saat percobaan rescale:", e)
 
 # --- Hasil Konversi dan Analisis Luas (aman)
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
@@ -644,26 +700,3 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
-
-# ======================
-# === Debug prints (opsional) ===
-# ======================
-if DEBUG:
-    st.markdown("---")
-    st.subheader("DEBUG — Informasi CRS & Centroid")
-    try:
-        if 'gdf_polygon' in locals() and gdf_polygon is not None:
-            st.write("gdf_polygon.crs:", getattr(gdf_polygon, "crs", None))
-            c = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-            st.write("Centroid PKKPR (lon, lat):", c.x, c.y)
-            try:
-                a3857 = gdf_polygon.to_crs(epsg=3857).area.sum()
-                st.write("DEBUG: Luas (EPSG:3857) setelah perbaikan:", a3857)
-            except Exception as e:
-                st.write("DEBUG: gagal hitung luas 3857:", e)
-        if 'gdf_tapak' in locals() and gdf_tapak is not None:
-            st.write("gdf_tapak.crs:", getattr(gdf_tapak, "crs", None))
-            c2 = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
-            st.write("Centroid Tapak (lon, lat):", c2.x, c2.y)
-    except Exception as e:
-        st.write("DEBUG error:", e)
