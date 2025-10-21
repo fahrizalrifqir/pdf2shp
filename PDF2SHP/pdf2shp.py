@@ -1,7 +1,7 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile, re
+import io, os, zipfile, re, tempfile
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -12,7 +12,7 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
-import tempfile
+import pyproj  # ✅ Tambahan untuk validasi EPSG
 
 # ======================
 # === Konfigurasi App ===
@@ -21,7 +21,6 @@ st.set_page_config(page_title="PKKPR → SHP & Overlay (Robust)", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
-# Toggle debug untuk output tambahan
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
 # ======================
@@ -29,15 +28,35 @@ DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 # ======================
 
 def get_utm_info(lon, lat):
-    """Menentukan zona UTM dan kode EPSG berdasarkan koordinat."""
-    zone = int((lon + 180) / 6) + 1
-    epsg = 32600 + zone if lat >= 0 else 32700 + zone
-    zone_label = f"{zone}{'N' if lat >= 0 else 'S'}"
+    """Menentukan zona UTM dan kode EPSG berdasarkan koordinat.
+    Menjaga zona agar tetap valid (1–60) dan memastikan EPSG valid.
+    """
+    try:
+        lon_f = float(lon)
+        lat_f = float(lat)
+    except Exception:
+        return 3857, "3857-Mercator"
+
+    # normalisasi longitude supaya tidak keluar dari -180 sampai 180
+    if lon_f > 180 or lon_f < -180:
+        lon_f = ((lon_f + 180) % 360) - 180
+
+    zone = int((lon_f + 180) / 6) + 1
+    zone = max(1, min(zone, 60))  # batasi antara 1 dan 60
+
+    if lat_f >= 0:
+        epsg = 32600 + zone
+        ns = "N"
+    else:
+        epsg = 32700 + zone
+        ns = "S"
+
+    epsg = int(epsg)
+    zone_label = f"{zone}{ns}"
     return epsg, zone_label
 
 
 def save_shapefile(gdf):
-    """Menyimpan GeoDataFrame ke ZIP Shapefile di memory buffer menggunakan tempfile."""
     with tempfile.TemporaryDirectory() as temp_dir:
         out_path = os.path.join(temp_dir, "PKKPR_Output.shp")
         gdf.to_crs(epsg=4326).to_file(out_path)
@@ -49,7 +68,6 @@ def save_shapefile(gdf):
         zip_buffer.seek(0)
         return zip_buffer.read()
 
-
 def normalize_text(s):
     if not s:
         return s
@@ -59,12 +77,7 @@ def normalize_text(s):
     s = s.replace('\xa0', ' ')
     return s
 
-
 def parse_coordinate(coord_str):
-    """
-    Fungsi universal untuk mengkonversi string koordinat (DMS atau Desimal) ke float.
-    Menangani berbagai separator dan karakter aneh.
-    """
     if coord_str is None:
         return None
     coord_str = normalize_text(str(coord_str)).strip()
@@ -115,7 +128,6 @@ def parse_coordinate(coord_str):
             pass
     return None
 
-
 def parse_luas_from_text(text):
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
@@ -136,7 +148,6 @@ def parse_luas_from_text(text):
             return m.group(1).strip(), "tanpa judul"
         return None, "tidak ditemukan"
 
-
 def format_angka_id(value):
     try:
         val = float(value)
@@ -147,21 +158,11 @@ def format_angka_id(value):
     except:
         return str(value)
 
-
-# ======================
-# === Fungsi Tambahan: DMS Parser dari Teks ===
-# ======================
-
 def extract_coords_dms_from_text(text):
-    """
-    Ekstraksi pasangan koordinat DMS dari teks seperti:
-    103° 17' 0,168" BT 0° 30' 20,722" LU
-    """
     coords = []
     if not text:
         return coords
     text = normalize_text(text)
-    # Pola koordinat DMS: <lon> BT <lat> LU
     pattern = r"(\d{1,3}°\s*\d{1,2}'\s*[\d,\.]+\"\s*[BbTt]{1,2})\s+(\d{1,2}°\s*\d{1,2}'\s*[\d,\.]+\"\s*[LlUu]{1,2})"
     for m in re.finditer(pattern, text):
         lon_raw, lat_raw = m.groups()
@@ -419,5 +420,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
