@@ -263,32 +263,59 @@ if gdf_polygon is not None:
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
-# ======================
-# === Layout Peta (PNG) ===
-# ======================
-if gdf_polygon is not None:
+# ---
+# Layout Peta (PNG)
+if 'gdf_polygon' in locals() and gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
-        gdf_poly3857 = gdf_polygon.to_crs(epsg=3857)
-        xmin, ymin, xmax, ymax = gdf_poly3857.total_bounds
-        w, h = xmax - xmin, ymax - ymin
-        fig, ax = plt.subplots(figsize=(14, 10) if w > h else (10, 14), dpi=150)
-        gdf_poly3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
+        gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+        xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+        width, height = xmax - xmin, ymax - ymin
+
+        fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
+
+        gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
+
         if gdf_tapak is not None:
-            gdf_tapak3857 = gdf_tapak.to_crs(epsg=3857)
-            gdf_tapak3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red")
-        if gdf_points is not None:
-            gdf_points3857 = gdf_points.to_crs(epsg=3857)
-            gdf_points3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30)
-        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
-        ax.set_xlim(xmin - w*0.05, xmax + w*0.05)
-        ax.set_ylim(ymin - h*0.05, ymax + h*0.05)
-        ax.set_axis_off()
+            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+            gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
+
+        if 'gdf_points' in locals() and gdf_points is not None:
+            gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+            gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
+
+        # Basemap (Esri World Imagery) via contextily
+        try:
+            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+        except Exception:
+            # Jika contextily tidak bisa load remote source, lewati quietly
+            if DEBUG:
+                st.write("Gagal memuat basemap Esri via contextily.")
+
+        ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
+        ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
+
+        legend = [
+            mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
+            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+            mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+        ]
+        ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
-        png_buf = io.BytesIO()
-        plt.savefig(png_buf, format="png", dpi=300, bbox_inches="tight")
+        ax.set_axis_off()
+
+        png_buffer = io.BytesIO()
+        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
         plt.close(fig)
-        png_buf.seek(0)
-        st.download_button("⬇️ Download Layout Peta (PNG)", png_buf, "layout_peta.png", mime="image/png")
+        png_buffer.seek(0)
+
+        st.download_button(
+            "⬇️ Download Layout Peta (PNG)",
+            png_buffer,
+            "layout_peta.png",
+            mime="image/png"
+        )
     except Exception as e:
         st.error(f"Gagal membuat layout peta: {e}")
+        if DEBUG:
+            st.exception(e)
