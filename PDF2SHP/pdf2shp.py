@@ -237,7 +237,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         luas_overlap = inter.area.sum() if not inter.empty else 0
         luas_tapak = gdf_tapak_utm.area.sum()
         luas_outside = luas_tapak - luas_overlap
-        st.success(f"**HASIL OVERLAY TAPAK:**\n- Luas Tapak: **{format_angka_id(luas_tapak)} m²**\n- Overlap PKKPR: **{format_angka_id(luas_overlap)} m²**\n- Di luar PKKPR: **{format_angka_id(luas_outside)} m²**")
+        st.success(f"**HASIL OVERLAY TAPAK:**\n- Luas Tapak UTM {utm_zone}: **{format_angka_id(luas_tapak)} m²**\n- Luas Tapak di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**\n- Luas Tapak Di luar PKKPR : **{format_angka_id(luas_outside)} m²**")
     except Exception as e:
         st.error(f"Gagal overlay: {e}")
     st.markdown("---")
@@ -319,3 +319,4 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
