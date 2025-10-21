@@ -1,3 +1,5 @@
+# PKKPR → Shapefile Converter & Overlay Tapak Proyek (Versi Aman, Bahasa Indonesia)
+# Lengkap dengan validasi EPSG, fallback, debug, dan perbaikan otomatis geometri.
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -12,7 +14,8 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
-import pyproj  # ✅ Tambahan untuk validasi EPSG
+import pyproj
+from shapely.geometry import mapping
 
 # ======================
 # === Konfigurasi App ===
@@ -21,6 +24,7 @@ st.set_page_config(page_title="PKKPR → SHP & Overlay (Robust)", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
+# Toggle debug untuk output tambahan
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
 # ======================
@@ -29,8 +33,7 @@ DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
 def get_utm_info(lon, lat):
     """Menentukan zona UTM dan kode EPSG berdasarkan koordinat.
-    Menjaga zona agar tetap valid (1–60) dan memastikan EPSG valid.
-    """
+    Menjaga zona agar tetap valid (1–60) dan memastikan EPSG valid."""
     try:
         lon_f = float(lon)
         lat_f = float(lat)
@@ -57,8 +60,10 @@ def get_utm_info(lon, lat):
 
 
 def save_shapefile(gdf):
+    """Simpan GeoDataFrame ke zip shapefile di memory buffer."""
     with tempfile.TemporaryDirectory() as temp_dir:
         out_path = os.path.join(temp_dir, "PKKPR_Output.shp")
+        # ekspor dalam WGS84 (EPSG:4326)
         gdf.to_crs(epsg=4326).to_file(out_path)
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -67,6 +72,7 @@ def save_shapefile(gdf):
                 zf.write(file_path, arcname=file)
         zip_buffer.seek(0)
         return zip_buffer.read()
+
 
 def normalize_text(s):
     if not s:
@@ -77,7 +83,12 @@ def normalize_text(s):
     s = s.replace('\xa0', ' ')
     return s
 
+
 def parse_coordinate(coord_str):
+    """
+    Konversi string koordinat (DMS atau desimal) ke float.
+    Menangani berbagai separator dan karakter aneh.
+    """
     if coord_str is None:
         return None
     coord_str = normalize_text(str(coord_str)).strip()
@@ -128,6 +139,7 @@ def parse_coordinate(coord_str):
             pass
     return None
 
+
 def parse_luas_from_text(text):
     text_clean = re.sub(r"\s+", " ", (text or ""), flags=re.IGNORECASE)
     luas_matches = re.findall(
@@ -148,6 +160,7 @@ def parse_luas_from_text(text):
             return m.group(1).strip(), "tanpa judul"
         return None, "tidak ditemukan"
 
+
 def format_angka_id(value):
     try:
         val = float(value)
@@ -157,6 +170,7 @@ def format_angka_id(value):
             return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return str(value)
+
 
 def extract_coords_dms_from_text(text):
     coords = []
@@ -173,16 +187,6 @@ def extract_coords_dms_from_text(text):
     return coords
 
 
-# ======================
-# === Upload PKKPR ===
-# ======================
-col1, col2 = st.columns([0.7, 0.3])
-with col1:
-    uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
-
-coords, gdf_points, gdf_polygon = [], None, None
-luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
-
 def extract_coords_from_text(text):
     out = []
     if not text:
@@ -193,6 +197,7 @@ def extract_coords_from_text(text):
         a, b = m.group(1), m.group(2)
         try:
             a_f, b_f = float(a), float(b)
+            # heuristik untuk Indonesia: lon ~95..141 (abs 95..145), lat ~-11..6
             if 90 <= abs(a_f) <= 145 and -11 <= b_f <= 6:
                 out.append((a_f, b_f))
             elif 90 <= abs(b_f) <= 145 and -11 <= a_f <= 6:
@@ -203,16 +208,120 @@ def extract_coords_from_text(text):
             continue
     return out
 
+
+# ======================
+# === Perbaikan Otomatis Geometri (Debug helper) ===
+# ======================
+def debug_and_fix_gdf_polygon(gdf, debug=DEBUG):
+    info = {}
+    try:
+        info['len'] = len(gdf)
+        info['geom_type'] = gdf.geom_type.unique().tolist()
+        info['crs'] = getattr(gdf, "crs", None)
+        info['bounds'] = gdf.total_bounds.tolist() if len(gdf) > 0 else None
+        info['is_empty'] = gdf.is_empty.all() if len(gdf) > 0 else True
+        info['is_valid'] = gdf.is_valid.all() if len(gdf) > 0 else False
+    except Exception as e:
+        if debug:
+            st.write("DEBUG: gagal baca properti gdf_polygon:", e)
+        info['error'] = str(e)
+
+    if debug:
+        st.write("DEBUG PKKPR: info awal:", info)
+
+    try:
+        # Jika kosong atau tidak valid: coba unary_union + make_valid
+        if info.get('is_empty') or not info.get('is_valid'):
+            try:
+                geom_union = gdf.unary_union
+                if geom_union is not None and not geom_union.is_empty:
+                    from shapely.validation import make_valid
+                    geom_valid = make_valid(geom_union)
+                    if not geom_valid.is_empty and geom_valid.geom_type in ('Polygon', 'MultiPolygon'):
+                        newg = gpd.GeoDataFrame(geometry=[geom_valid], crs=gdf.crs)
+                        if debug: st.write("DEBUG: make_valid/unary_union berhasil membentuk polygon.")
+                        return newg, "fixed_by_make_valid"
+            except Exception as e:
+                if debug: st.write("DEBUG: unary_union/make_valid gagal:", e)
+
+        # Jika geometri Point/MultiPoint -> coba buat polygon dari titik
+        geom_types = [t.lower() for t in gdf.geom_type.unique().tolist()]
+        if any('point' in t for t in geom_types) or any('multipoint' in t for t in geom_types):
+            coords = []
+            for geom in gdf.geometry:
+                try:
+                    if geom is None: continue
+                    if geom.geom_type == 'Point':
+                        coords.append((geom.x, geom.y))
+                    else:
+                        for p in geom.geoms:
+                            coords.append((p.x, p.y))
+                except Exception:
+                    continue
+            seen = set(); uniq = []
+            for c in coords:
+                if c not in seen:
+                    seen.add(c); uniq.append(c)
+            if len(uniq) >= 3:
+                if uniq[0] != uniq[-1]:
+                    uniq.append(uniq[0])
+                new_poly = Polygon(uniq)
+                newg = gpd.GeoDataFrame(geometry=[new_poly], crs=gdf.crs)
+                if debug: st.write(f"DEBUG: Dibangun polygon dari titik (count={len(uniq)-1}).")
+                return newg, "fixed_from_points"
+
+        # Cek indikasi terbalik (lat/lon tertukar) berdasarkan bounds aneh
+        try:
+            b = gdf.total_bounds
+            xmin, ymin, xmax, ymax = b
+            if (abs(xmin) <= 90 and abs(xmax) <= 90) and (abs(ymin) >= 90 or abs(ymax) >= 90):
+                def swapxy(geom):
+                    try:
+                        if geom.geom_type == 'Polygon':
+                            rings = []
+                            for ring in [geom.exterior] + list(geom.interiors):
+                                rings.append([(y, x) for (x, y) in ring.coords])
+                            return Polygon(rings[0], rings[1:])
+                        elif geom.geom_type == 'Point':
+                            return Point(geom.y, geom.x)
+                        else:
+                            return geom
+                    except Exception:
+                        return geom
+                g_swapped = gdf.copy()
+                g_swapped['geometry'] = g_swapped.geometry.apply(swapxy)
+                if debug: st.write("DEBUG: Mencoba swap XY pada geometri karena indikasi terbalik.")
+                return g_swapped, "fixed_swapped_xy"
+        except Exception:
+            pass
+
+        return gdf, "no_change"
+    except Exception as e:
+        if debug:
+            st.write("DEBUG: error saat debug_and_fix_gdf_polygon:", e)
+        return gdf, "error"
+
+
+# ======================
+# === Upload PKKPR ===
+# ======================
+col1, col2 = st.columns([0.7, 0.3])
+with col1:
+    uploaded_pkkpr = st.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
+
+coords, gdf_points, gdf_polygon = [], None, None
+luas_pkkpr_doc, luas_pkkpr_doc_label = None, None
+
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith('.pdf'):
-        coords_disetujui, coords_dimohon, coords_plain = [], [], []
+        coords_plain = []
         full_text = ""
-        blok_aktif = None
         try:
             with pdfplumber.open(uploaded_pkkpr) as pdf:
                 for page_idx, page in enumerate(pdf.pages, start=1):
                     text = page.extract_text() or ""
                     full_text += "\n" + text
+
                     tables = page.extract_tables() or []
                     for tb in tables:
                         if not tb or len(tb) <= 1:
@@ -243,29 +352,36 @@ if uploaded_pkkpr:
                                     is_lat_valid = True
                             if is_lon_valid and is_lat_valid:
                                 coords_plain.append((lon_val, lat_val))
-                    # fallback cari DMS dari teks
+
                     dms_found = extract_coords_dms_from_text(text)
                     if dms_found:
                         coords_plain.extend(dms_found)
+
                     found_pairs = extract_coords_from_text(text)
                     if found_pairs:
                         coords_plain.extend(found_pairs)
+
             if not coords_plain:
-                coords_plain = extract_coords_dms_from_text(full_text)
+                coords_plain = extract_coords_dms_from_text(full_text) or extract_coords_from_text(full_text)
+
             coords = list(dict.fromkeys(coords_plain))
             luas_pkkpr_doc, luas_pkkpr_doc_label = parse_luas_from_text(full_text)
+
             if coords:
                 flipped_coords = coords.copy()
                 if len(flipped_coords) > 1 and flipped_coords[0] != flipped_coords[-1]:
                     flipped_coords.append(flipped_coords[0])
+
                 gdf_points = gpd.GeoDataFrame(
                     pd.DataFrame(flipped_coords, columns=["Longitude", "Latitude"]),
                     geometry=[Point(xy) for xy in flipped_coords],
                     crs="EPSG:4326"
                 )
                 gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(flipped_coords)], crs="EPSG:4326")
+
             with col2:
                 st.markdown(f"<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅ {len(coords)} titik (PDF terdeteksi)</p>", unsafe_allow_html=True)
+
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
             if DEBUG:
@@ -286,30 +402,74 @@ if uploaded_pkkpr:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
             if DEBUG:
                 st.exception(e)
-
 else:
     gdf_polygon = None
 
-# --- Hasil Konversi dan Analisis
+# Jika gdf_polygon ada, jalankan perbaikan otomatis (debug helper)
+if 'gdf_polygon' in locals() and gdf_polygon is not None:
+    gdf_polygon, fix_status = debug_and_fix_gdf_polygon(gdf_polygon, debug=DEBUG)
+    if DEBUG:
+        st.write("DEBUG: fix_status =", fix_status)
+
+# --- Hasil Konversi dan Analisis Luas (aman)
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
     try:
-        zip_pkkpr_bytes = save_shapefile(gdf_polygon)
-        st.download_button("⬇️ Download SHP PKKPR (ZIP)", zip_pkkpr_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
-    except Exception as e:
-        st.error(f"Gagal menyiapkan unduhan shapefile: {e}")
-    try:
-        gdf_polygon_proj = gdf_polygon.to_crs(epsg=4326)
-        centroid = gdf_polygon_proj.geometry.centroid.iloc[0]
+        try:
+            zip_pkkpr_bytes = save_shapefile(gdf_polygon)
+            st.download_button("⬇️ Download SHP PKKPR (ZIP)", zip_pkkpr_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
+        except Exception as e:
+            st.error(f"Gagal menyiapkan unduhan shapefile: {e}")
+            if DEBUG:
+                st.exception(e)
+
+        # centroid pada EPSG:4326
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-        luas_pkkpr_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
-        luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum()
+
+        try:
+            pyproj.CRS.from_epsg(int(utm_epsg))
+            use_epsg = int(utm_epsg)
+            used_zone_label = utm_zone
+        except Exception:
+            if DEBUG:
+                st.warning(f"UTM EPSG {utm_epsg} tidak valid — fallback ke EPSG:3857.")
+            use_epsg = 3857
+            used_zone_label = "fallback-3857"
+
+        try:
+            gdf_polygon_utm = gdf_polygon.to_crs(epsg=use_epsg)
+            luas_pkkpr_utm = gdf_polygon_utm.area.sum()
+        except Exception as e:
+            if DEBUG:
+                st.warning(f"Gagal konversi ke EPSG {use_epsg}: {e}")
+            gdf_polygon_utm = gdf_polygon.to_crs(epsg=3857)
+            luas_pkkpr_utm = gdf_polygon_utm.area.sum()
+            used_zone_label = "fallback-3857"
+
+        try:
+            luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum()
+        except Exception:
+            luas_pkkpr_mercator = None
+
         luas_doc_str = f"{luas_pkkpr_doc} ({luas_pkkpr_doc_label})" if luas_pkkpr_doc else "tidak tersedia (dokumen)"
-        st.info(f"**Analisis Luas Batas PKKPR**:\n- Luas PKKPR (dokumen): **{luas_doc_str}**\n- Luas PKKPR (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n- Luas PKKPR (WGS84 Mercator): **{format_angka_id(luas_pkkpr_mercator)} m²**")
+        info_lines = [
+            f"**Analisis Luas Batas PKKPR**:",
+            f"- Luas PKKPR (dokumen): **{luas_doc_str}**",
+            f"- Luas PKKPR (UTM {used_zone_label}): **{format_angka_id(luas_pkkpr_utm)} m²**"
+        ]
+        if luas_pkkpr_mercator is not None:
+            info_lines.append(f"- Luas PKKPR (WGS84 Mercator): **{format_angka_id(luas_pkkpr_mercator)} m²**")
+
+        st.info("\n".join(info_lines))
     except Exception as e:
         st.error(f"Gagal menghitung luas: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
-# Upload Tapak Proyek
+# ======================
+# === Upload Tapak Proyek ===
+# ======================
 col1, col2 = st.columns([0.7, 0.3])
 with col1:
     uploaded_tapak = st.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"], key='tapak')
@@ -328,50 +488,103 @@ if uploaded_tapak:
                 st.markdown("<p style='color: green; font-weight: bold; padding-top: 3.5rem;'>✅</p>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
+        if DEBUG:
+            st.exception(e)
 
-# Analisis Overlay
+# ======================
+# === Analisis Overlay (aman) ===
+# ======================
 if gdf_polygon is not None and gdf_tapak is not None:
     try:
         centroid = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-        gdf_tapak_utm, gdf_polygon_utm = gdf_tapak.to_crs(epsg=utm_epsg), gdf_polygon.to_crs(epsg=utm_epsg)
+        try:
+            pyproj.CRS.from_epsg(int(utm_epsg))
+            use_epsg = int(utm_epsg)
+            used_zone_label = utm_zone
+        except Exception:
+            if DEBUG:
+                st.warning(f"UTM EPSG {utm_epsg} tidak valid — fallback ke EPSG:3857.")
+            use_epsg = 3857
+            used_zone_label = "fallback-3857"
+
+        try:
+            gdf_tapak_utm = gdf_tapak.to_crs(epsg=use_epsg)
+            gdf_polygon_utm = gdf_polygon.to_crs(epsg=use_epsg)
+        except Exception as e:
+            if DEBUG:
+                st.warning(f"Gagal konversi ke EPSG {use_epsg}: {e}")
+            gdf_tapak_utm = gdf_tapak.to_crs(epsg=3857)
+            gdf_polygon_utm = gdf_polygon.to_crs(epsg=3857)
+            used_zone_label = "fallback-3857"
+
         inter = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how='intersection')
         luas_overlap = inter.area.sum() if not inter.empty else 0
         luas_tapak = gdf_tapak_utm.area.sum()
         luas_outside = luas_tapak - luas_overlap
-        st.success(f"**HASIL OVERLAY TAPAK:**\n- Luas Tapak: **{format_angka_id(luas_tapak)} m²**\n- Overlap PKKPR: **{format_angka_id(luas_overlap)} m²**\n- Di luar PKKPR: **{format_angka_id(luas_outside)} m²**")
+
+        st.success(
+            f"**HASIL OVERLAY TAPAK:**\n"
+            f"- Luas Tapak: **{format_angka_id(luas_tapak)} m²**\n"
+            f"- Overlap PKKPR: **{format_angka_id(luas_overlap)} m²**\n"
+            f"- Di luar PKKPR: **{format_angka_id(luas_outside)} m²**"
+        )
     except Exception as e:
         st.error(f"Gagal overlay: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
-# ---
-# Preview Peta Interaktif (Folium)
+# ======================
+# === Preview Peta Interaktif (Folium) ===
+# ======================
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
+    try:
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, attr='')
+        Fullscreen(position="bottomleft").add_to(m)
 
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None, attr='')
-    Fullscreen(position="bottomleft").add_to(m)
+        folium.TileLayer("openstreetmap", name="OpenStreetMap", attr='').add_to(m)
+        folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attr='').add_to(m)
+        folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attr='').add_to(m)
 
-    folium.TileLayer("openstreetmap", name="OpenStreetMap", attr='').add_to(m)
-    folium.TileLayer("CartoDB Positron", name="CartoDB Positron", attr='').add_to(m)
-    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery", attr='').add_to(m)
+        folium.GeoJson(
+            gdf_polygon.to_crs(epsg=4326),
+            name="Batas PKKPR",
+            style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}
+        ).add_to(m)
 
-    folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="Batas PKKPR", style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
+        if gdf_tapak is not None:
+            folium.GeoJson(
+                gdf_tapak.to_crs(epsg=4326),
+                name="Tapak Proyek",
+                style_function=lambda x: {"color": "red", "weight": 2, "fillColor": "red", "fillOpacity": 0.4}
+            ).add_to(m)
 
-    if gdf_tapak is not None:
-        folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "weight": 2, "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+        if 'gdf_points' in locals() and gdf_points is not None:
+            for i, row in gdf_points.iterrows():
+                folium.CircleMarker(
+                    [row.geometry.y, row.geometry.x],
+                    radius=4,
+                    color="black",
+                    fill=True,
+                    fill_color="orange",
+                    fill_opacity=1,
+                    popup=f"Titik {i+1}"
+                ).add_to(m)
 
-    if 'gdf_points' in locals() and gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black", fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
-
-    folium.LayerControl(collapsed=True).add_to(m)
-    st_folium(m, width=900, height=600)
+        folium.LayerControl(collapsed=True).add_to(m)
+        st_folium(m, width=900, height=600)
+    except Exception as e:
+        st.error(f"Gagal menampilkan peta interaktif: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
-# ---
-# Layout Peta (PNG)
+# ======================
+# === Layout Peta (PNG) untuk dokumentasi ===
+# ======================
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
@@ -384,14 +597,25 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
 
         if gdf_tapak is not None:
-            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
-            gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
+            try:
+                gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+                gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
+            except Exception as e:
+                if DEBUG:
+                    st.warning(f"Gagal konversi Tapak ke 3857 untuk layout PNG: {e}")
 
         if 'gdf_points' in locals() and gdf_points is not None:
-            gdf_points_3857 = gdf_points.to_crs(epsg=3857)
-            gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
+            try:
+                gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+                gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
+            except Exception:
+                pass
 
-        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+        try:
+            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+        except Exception:
+            if DEBUG:
+                st.warning("Gagal menambahkan basemap. Lanjut tanpa basemap.")
 
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
@@ -421,5 +645,25 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         if DEBUG:
             st.exception(e)
 
-
-
+# ======================
+# === Debug prints (opsional) ===
+# ======================
+if DEBUG:
+    st.markdown("---")
+    st.subheader("DEBUG — Informasi CRS & Centroid")
+    try:
+        if 'gdf_polygon' in locals() and gdf_polygon is not None:
+            st.write("gdf_polygon.crs:", getattr(gdf_polygon, "crs", None))
+            c = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+            st.write("Centroid PKKPR (lon, lat):", c.x, c.y)
+            try:
+                a3857 = gdf_polygon.to_crs(epsg=3857).area.sum()
+                st.write("DEBUG: Luas (EPSG:3857) setelah perbaikan:", a3857)
+            except Exception as e:
+                st.write("DEBUG: gagal hitung luas 3857:", e)
+        if 'gdf_tapak' in locals() and gdf_tapak is not None:
+            st.write("gdf_tapak.crs:", getattr(gdf_tapak, "crs", None))
+            c2 = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+            st.write("Centroid Tapak (lon, lat):", c2.x, c2.y)
+    except Exception as e:
+        st.write("DEBUG error:", e)
