@@ -1,3 +1,4 @@
+# app.py — PKKPR → SHP & Overlay (Final, multi-format + UTM auto-detect)
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -14,6 +15,7 @@ from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
 from shapely import affinity
 from shapely.validation import make_valid
+from pyproj import Transformer
 
 # ======================
 # === Konfigurasi App ===
@@ -28,10 +30,6 @@ DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 if st.sidebar.button("🔄 Refresh Aplikasi"):
     try:
         st.cache_data.clear()
-    except Exception:
-        pass
-    try:
-        st.cache_resource.clear()
     except Exception:
         pass
     st.experimental_rerun()
@@ -56,7 +54,6 @@ def get_utm_info(lon, lat):
 def save_shapefile(gdf):
     with tempfile.TemporaryDirectory() as tmp:
         out_path = os.path.join(tmp, "PKKPR_Output.shp")
-        # force to single geometry type earlier; gdf should already be polygon-only
         gdf.to_crs(epsg=4326).to_file(out_path)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -110,10 +107,10 @@ def extract_coords_bt_ls_from_text(text):
 def extract_coords_from_text(text):
     out = []
     text = normalize_text(text)
+    # decimal with dot, e.g. 108.064739 -6.862542
     pattern = r"(-?\d{1,3}\.\d+)[^\d\-\.,]+(-?\d{1,3}\.\d+)"
     for m in re.finditer(pattern, text):
         a, b = float(m.group(1)), float(m.group(2))
-        # Try interpret as (lon, lat) or swapped (lat, lon)
         if 90 <= abs(a) <= 145 and -11 <= b <= 6:
             out.append((a, b))
         elif 90 <= abs(b) <= 145 and -11 <= a <= 6:
@@ -123,7 +120,7 @@ def extract_coords_from_text(text):
 def extract_coords_comma_decimal(text):
     coords = []
     text = normalize_text(text)
-    # handle patterns like: 108,064739 -6,862542  or 108,064739\t-6,862542
+    # comma decimal: 108,064739 -6,862542
     pattern = r"(\d{1,3},\d+)\s+(-?\d{1,2},\d+)"
     for m in re.finditer(pattern, text):
         lon_str, lat_str = m.groups()
@@ -136,6 +133,25 @@ def extract_coords_comma_decimal(text):
             continue
     return coords
 
+def extract_coords_projected(text):
+    """
+    Detect pairs of large numbers likely to be metric coordinates (e.g. UTM/northing-easting).
+    Returns list of tuples (a, b) as found in text.
+    """
+    out = []
+    text = normalize_text(text)
+    # matches numbers with at least 5 digits before decimal (e.g. 785703.2666 or 9261700.96)
+    pattern = r"(-?\d{5,13}(?:\.\d+)?)[^\d\-\.]{1,6}(-?\d{5,13}(?:\.\d+)?)"
+    for m in re.finditer(pattern, text):
+        a_str, b_str = m.groups()
+        try:
+            a = float(a_str)
+            b = float(b_str)
+            out.append((a, b))
+        except:
+            continue
+    return out
+
 # ======================
 # === Fix Geometry ===
 # ======================
@@ -145,7 +161,6 @@ def fix_polygon_geometry(gdf):
     gdf = gdf.copy()
     gdf["geometry"] = gdf["geometry"].apply(lambda g: make_valid(g))
     b = gdf.total_bounds
-    # If bounds obviously not lon/lat, attempt scaling heuristics
     if not (-180 <= b[0] <= 180 and -90 <= b[1] <= 90):
         for fac in [10, 100, 1000, 10000, 100000]:
             g2 = gdf.copy()
@@ -166,7 +181,7 @@ def ensure_polygon_only(gdf):
 def auto_fix_to_polygon(coords):
     """
     Hapus duplikat berurutan, tutup polygon, coba buat Polygon.
-    Jika gagal, gunakan convex hull dari titik.
+    Jika masih gagal, buat convex hull dari titik.
     """
     if not coords or len(coords) < 3:
         return None
@@ -186,37 +201,222 @@ def auto_fix_to_polygon(coords):
         return None
 
 # ======================
-# === Upload File ===
+# === UTM Auto-detect & Transform ===
+# ======================
+def try_zones_and_find_valid(easting, northing):
+    """
+    Try multiple EPSG zones and return first EPSG that transforms to coordinates inside Indonesia.
+    We try southern (327xx) and northern (326xx) UTM zones for zone numbers 40..55 (wide range).
+    """
+    for zone in range(40, 56):
+        # south / north variants
+        for base in (32700, 32600):
+            epsg = base + zone
+            try:
+                transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+                lon, lat = transformer.transform(easting, northing)
+                if 95.0 <= lon <= 141.0 and -11.0 <= lat <= 6.0:
+                    return epsg, lon, lat
+            except Exception:
+                continue
+    return None, None, None
+
+def detect_and_transform_projected_pairs(pairs, epsg_override=None):
+    """
+    pairs: list of (a, b) floats from PDF. Could be (northing, easting) or (easting, northing).
+    Attempt to detect ordering and UTM zone. Return list of (lon, lat) in EPSG:4326.
+    If epsg_override provided (int), use that EPSG directly.
+    """
+    if not pairs:
+        return []
+
+    # heuristics: check magnitude of first vs second components (northing in Indonesia ~9e6, easting ~5e5-8e5)
+    first_vals = [abs(a) for a, b in pairs]
+    second_vals = [abs(b) for a, b in pairs]
+    mean_first = float(pd.Series(first_vals).median())
+    mean_second = float(pd.Series(second_vals).median())
+
+    # decide whether PDF lists (northing, easting) or (easting, northing)
+    likely_order = None  # 'ne' or 'en'
+    if mean_first > 1e6 and mean_second < 2e6:
+        likely_order = "ne"  # first is northing, second easting
+    elif mean_second > 1e6 and mean_first < 2e6:
+        likely_order = "en"  # first is easting, second northing
+    else:
+        # fallback: check typical ranges
+        # if both are large but one ~9e6 and other ~7e5, determine based on closer
+        diffs_first = [abs(v - 9e6) for v in first_vals]
+        diffs_second = [abs(v - 9e6) for v in second_vals]
+        if pd.Series(diffs_first).median() < pd.Series(diffs_second).median():
+            likely_order = "ne"
+        else:
+            likely_order = "en"
+
+    transformed = []
+    # try override EPSG first if provided
+    if epsg_override:
+        try:
+            transformer = Transformer.from_crs(f"EPSG:{epsg_override}", "EPSG:4326", always_xy=True)
+            for a, b in pairs:
+                if likely_order == "ne":
+                    easting, northing = float(b), float(a)
+                else:
+                    easting, northing = float(a), float(b)
+                lon, lat = transformer.transform(easting, northing)
+                transformed.append((lon, lat))
+            return transformed, epsg_override
+        except Exception:
+            pass
+
+    # Try to find an EPSG that fits (use median pair)
+    # Choose median pair to test
+    med_idx = len(pairs) // 2
+    a_med, b_med = pairs[med_idx]
+    if likely_order == "ne":
+        e_med, n_med = float(b_med), float(a_med)
+    else:
+        e_med, n_med = float(a_med), float(b_med)
+
+    epsg_found, lon_test, lat_test = try_zones_and_find_valid(e_med, n_med)
+    if epsg_found is None:
+        # try flipping order and test again
+        if likely_order == "ne":
+            e_med, n_med = float(a_med), float(b_med)
+            epsg_found, lon_test, lat_test = try_zones_and_find_valid(e_med, n_med)
+            if epsg_found:
+                likely_order = "en"
+        else:
+            e_med, n_med = float(b_med), float(a_med)
+            epsg_found, lon_test, lat_test = try_zones_and_find_valid(e_med, n_med)
+            if epsg_found:
+                likely_order = "ne"
+
+    if epsg_found is None:
+        return None, None
+
+    # Now transform all pairs using epsg_found and chosen order
+    transformer = Transformer.from_crs(f"EPSG:{epsg_found}", "EPSG:4326", always_xy=True)
+    for a, b in pairs:
+        if likely_order == "ne":
+            easting, northing = float(b), float(a)
+        else:
+            easting, northing = float(a), float(b)
+        lon, lat = transformer.transform(easting, northing)
+        transformed.append((lon, lat))
+    return transformed, epsg_found
+
+# ======================
+# === PDF Parsing (cached) ===
+# ======================
+@st.cache_data
+def parse_pdf_texts(file_bytes):
+    """
+    Return aggregated text pages as list of strings to preserve page structure.
+    Input can be file-like (BytesIO) or an UploadedFile object.
+    """
+    texts = []
+    try:
+        # pdfplumber accepts file-like
+        with pdfplumber.open(file_bytes) as pdf:
+            for page in pdf.pages:
+                texts.append(page.extract_text() or "")
+    except Exception:
+        # fallback: try reading raw bytes to string (not ideal)
+        try:
+            raw = file_bytes.read().decode("utf-8", errors="ignore")
+            texts = [raw]
+        except Exception:
+            texts = []
+    return texts
+
+# ======================
+# === Upload File UI ===
 # ======================
 col1, col2 = st.columns([0.7, 0.3])
 uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
+coords_detected = []
+gdf_points = None
+gdf_polygon = None
+detected_proj_epsg = None  # if projected detected
 
-coords, gdf_points, gdf_polygon = [], None, None
+# Sidebar override for EPSG if auto-detect fails
+st.sidebar.markdown("## Pengaturan Proyeksi (opsional)")
+epsg_override_input = st.sidebar.text_input("Override EPSG (mis. 32748) — kosong = auto-detect", value="")
 
+# ======================
+# === Process Uploaded PKKPR ===
+# ======================
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.lower().endswith(".pdf"):
         try:
-            text_full = ""
-            with pdfplumber.open(uploaded_pkkpr) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    text_full += "\n" + text
-                    coords += extract_coords_bt_ls_from_text(text)
-                    coords += extract_coords_from_text(text)
-                    coords += extract_coords_comma_decimal(text)
+            texts = parse_pdf_texts(uploaded_pkkpr)
+            # collect coordinate candidates from all pages
+            coords_geo = []      # lon, lat decimal
+            coords_geo_comma = []  # lon, lat decimal from comma
+            coords_btls = []     # DMS BT/LS
+            coords_proj = []     # projected numeric pairs
+            for page_text in texts:
+                coords_btls += extract_coords_bt_ls_from_text(page_text)
+                coords_geo += extract_coords_from_text(page_text)
+                coords_geo_comma += extract_coords_comma_decimal(page_text)
+                coords_proj += extract_coords_projected(page_text)
 
-            if coords:
-                poly = auto_fix_to_polygon(coords)
-                if poly is not None:
-                    gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords, columns=["Lon", "Lat"]),
-                                                  geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
-                    gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
-                    gdf_polygon = fix_polygon_geometry(gdf_polygon)
-                    col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik terdeteksi & polygon valid</p>", unsafe_allow_html=True)
+            # Combine geographic coords first (dot & comma & DMS)
+            coords_all_geo = []
+            coords_all_geo += coords_btls
+            coords_all_geo += coords_geo
+            coords_all_geo += coords_geo_comma
+
+            # Decide whether file primarily uses projected coords
+            # Heuristic: if we found many projected pairs and few geographic pairs -> treat as projected set
+            if len(coords_proj) >= max(3, len(coords_all_geo)):
+                # Handle projected set: try detect and transform
+                epsg_override = int(epsg_override_input) if epsg_override_input.strip().isdigit() else None
+                transformed, epsg_found = detect_and_transform_projected_pairs(coords_proj, epsg_override=epsg_override)
+                if transformed is None:
+                    # Could not auto-detect: ask user via sidebar to choose EPSG
+                    st.sidebar.warning("Auto-detect zona/proyeksi untuk koordinat metrik gagal. Pilih EPSG manual atau gunakan default 32748.")
+                    epsg_choices = ["32748", "32747", "32749", "32746", "32750", "32648", "32647", "32649"]
+                    epsg_pick = st.sidebar.selectbox("Pilih EPSG (override)", epsg_choices, index=0)
+                    try:
+                        epsg_num = int(epsg_pick)
+                        transformed, epsg_found = detect_and_transform_projected_pairs(coords_proj, epsg_override=epsg_num)
+                    except Exception:
+                        transformed, epsg_found = None, None
+
+                if transformed is None:
+                    st.error("Tidak dapat mendeteksi proyeksi koordinat metrik. Periksa pilihan EPSG di sidebar atau periksa file PDF.")
                 else:
-                    st.error("Koordinat tidak membentuk polygon yang valid.")
+                    # transformed is list of lon,lat
+                    coords_detected = transformed
+                    detected_proj_epsg = epsg_found
+                    # make gdf_points + polygon
+                    gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords_detected, columns=["Lon", "Lat"]),
+                                                  geometry=[Point(x, y) for x, y in coords_detected], crs="EPSG:4326")
+                    poly = auto_fix_to_polygon(coords_detected)
+                    if poly is not None:
+                        gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                        gdf_polygon = fix_polygon_geometry(gdf_polygon)
+                        col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords_detected)} titik (proyeksi) terdeteksi — EPSG: {detected_proj_epsg}</p>", unsafe_allow_html=True)
+                    else:
+                        st.error("Koordinat metrik terdeteksi namun gagal membentuk polygon valid.")
             else:
-                st.error("Tidak ditemukan koordinat pada PDF.")
+                # Use geographic coordinates (mix of found formats)
+                coords_detected = coords_all_geo
+                if coords_detected:
+                    if coords_detected[0] != coords_detected[-1]:
+                        coords_detected.append(coords_detected[0])
+                    gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords_detected, columns=["Lon", "Lat"]),
+                                                  geometry=[Point(x, y) for x, y in coords_detected], crs="EPSG:4326")
+                    poly = auto_fix_to_polygon(coords_detected)
+                    if poly is not None:
+                        gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                        gdf_polygon = fix_polygon_geometry(gdf_polygon)
+                        col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords_detected)} titik (geografis) terdeteksi</p>", unsafe_allow_html=True)
+                    else:
+                        st.error("Koordinat geografis terdeteksi namun gagal membentuk polygon valid.")
+                else:
+                    st.error("Tidak ditemukan koordinat dalam PDF.")
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
             if DEBUG:
@@ -243,8 +443,17 @@ if uploaded_pkkpr:
 if gdf_polygon is not None:
     try:
         # Pastikan polygon-only sebelum simpan
-        gdf_polygon = ensure_polygon_only(gdf_polygon)
-        zip_bytes = save_shapefile(gdf_polygon)
+        try:
+            gdf_polygon_export = ensure_polygon_only(gdf_polygon)
+        except Exception as ee:
+            # coba convert multiparts etc
+            try:
+                gdf_polygon_export = gdf_polygon.explode(index_parts=False).reset_index(drop=True)
+                gdf_polygon_export = ensure_polygon_only(gdf_polygon_export)
+            except Exception:
+                raise ee
+
+        zip_bytes = save_shapefile(gdf_polygon_export)
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", zip_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
     except Exception as e:
         st.error(f"Gagal menyiapkan shapefile: {e}")
