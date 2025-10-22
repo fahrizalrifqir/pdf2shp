@@ -336,4 +336,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
             mime="image/png"
         )
     except Exception as e:
-        st.error(f"Gagal membuat layout peta:
+        st.error(f"Gagal membuat layout peta: {e}")
+        if DEBUG:
+            st.exception(e)
