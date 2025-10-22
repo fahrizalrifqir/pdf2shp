@@ -18,17 +18,11 @@ from shapely.validation import make_valid
 # ======================
 # === Konfigurasi App ===
 # ======================
-st.set_page_config(page_title="PKKPR → SHP & Overlay (Final BT/LS)", layout="wide")
+st.set_page_config(page_title="PKKPR → SHP & Overlay (Final)", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek")
 st.markdown("---")
 
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
-
-# Tombol refresh manual
-if st.sidebar.button("🔄 Refresh Aplikasi"):
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    st.rerun()
 
 # ======================
 # === Fungsi Umum ===
@@ -68,7 +62,7 @@ def format_angka_id(value):
         return str(value)
 
 # ======================
-# === Fungsi Parsing Koordinat ===
+# === Parsing Koordinat ===
 # ======================
 def dms_bt_ls_to_decimal(dms_str):
     if not isinstance(dms_str, str):
@@ -127,7 +121,7 @@ def extract_coords_comma_decimal(text):
     return coords
 
 # ======================
-# === Fungsi Geometri ===
+# === Fix Geometry ===
 # ======================
 def fix_polygon_geometry(gdf):
     if gdf is None or len(gdf) == 0:
@@ -177,21 +171,18 @@ uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shape
 
 coords, gdf_points, gdf_polygon = [], None, None
 
-@st.cache_data
-def parse_pdf(uploaded_pkkpr):
-    coords = []
-    with pdfplumber.open(uploaded_pkkpr) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            coords += extract_coords_bt_ls_from_text(text)
-            coords += extract_coords_from_text(text)
-            coords += extract_coords_comma_decimal(text)
-    return coords
-
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         try:
-            coords = parse_pdf(uploaded_pkkpr)
+            text_full = ""
+            with pdfplumber.open(uploaded_pkkpr) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    text_full += "\n" + text
+                    coords += extract_coords_bt_ls_from_text(text)
+                    coords += extract_coords_from_text(text)
+                    coords += extract_coords_comma_decimal(text)
+
             if coords:
                 poly = auto_fix_to_polygon(coords)
                 if poly is not None:
@@ -199,9 +190,9 @@ if uploaded_pkkpr:
                                                   geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
                     gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
                     gdf_polygon = fix_polygon_geometry(gdf_polygon)
-                    col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik & polygon valid</p>", unsafe_allow_html=True)
+                    col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik terdeteksi & polygon valid</p>", unsafe_allow_html=True)
                 else:
-                    st.error("Koordinat tidak membentuk polygon valid.")
+                    st.error("Koordinat tidak membentuk polygon yang valid.")
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
 
@@ -219,7 +210,7 @@ if uploaded_pkkpr:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
 
 # ======================
-# === Hasil Analisis ===
+# === Hasil & Luas ===
 # ======================
 if gdf_polygon is not None:
     try:
@@ -297,7 +288,9 @@ if gdf_polygon is not None:
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
-# === Layout PNG ===
+# ======================
+# === Layout Peta PNG ===
+# ======================
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
@@ -306,6 +299,7 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         width, height = xmax - xmin, ymax - ymin
 
         fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
+
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
 
         if gdf_tapak is not None:
@@ -320,10 +314,11 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
             ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         except Exception:
             if DEBUG:
-                st.write("Gagal memuat basemap Esri.")
+                st.write("Gagal memuat basemap Esri via contextily.")
 
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
+
         legend = [
             mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
@@ -331,13 +326,16 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         ]
         ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
-                ax.set_axis_off()
-                png_buffer = io.BytesIO()
-                plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-                plt.close(fig)
-                png_buffer.seek(0)
-        
-                st.download_button(
+        ax.set_axis_off()
+
+        png_buffer = io.BytesIO()
+        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        png_buffer.seek(0)
+
+        st.download_button(
+            "⬇️
+
                     "⬇️ Download Layout Peta (PNG)",
                     png_buffer,
                     "layout_peta.png",
@@ -366,5 +364,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
