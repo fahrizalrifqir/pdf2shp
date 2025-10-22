@@ -47,7 +47,6 @@ def format_angka_id(value):
         if abs(val - round(val)) < 0.001:
             return f"{int(round(val)):,}".replace(",", ".")
         else:
-            # format with comma as decimal separator and dot as thousands
             s = f"{val:,.2f}"
             s = s.replace(",", "X").replace(".", ",").replace("X", ".")
             return s
@@ -60,49 +59,57 @@ def get_utm_info(lon, lat):
     zone_label = f"{zone}{'N' if lat >= 0 else 'S'}"
     return epsg, zone_label
 
+# Improved luas parsing (robust terhadap unicode)
 def parse_luas_line(line):
     """Return raw-like luas string as in document (number + unit preserved when possible)."""
     if not line:
         return None
-    s = line.strip()
-    # look for patterns like "luas ... 9.549 M²" or "luas ... 0,95 Ha"
-    m = re.search(r"(luas[^\d\n\r:]{0,20}[:\-–]?\s*)([\d\.\,]+)\s*([a-zA-Z²\s0-9]*)", s, flags=re.IGNORECASE)
-    if not m:
-        # try a simpler fallback: find number + unit anywhere
-        m2 = re.search(r"([\d\.\,]+)\s*(m2|m²|m\s*2|ha|hektar)?", s, flags=re.IGNORECASE)
-        if not m2:
-            return None
+    s = str(line)
+    # normalize weird spaces and unicode superscript 2
+    s = s.replace('\xa0', ' ').replace('\u00B2', '²').replace('m2', 'm²')
+    unit_pattern = r"(m2|m²|m\s*2|ha|hektar)"
+    # 1) try explicit labelled pattern
+    m = re.search(r"(luas[^\n\r]{0,60}?(:|–|-)?\s*)([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s\-–]*(" + unit_pattern + r")?",
+                  s, flags=re.IGNORECASE)
+    if m:
+        num = m.group(3)
+        unit = (m.group(4) or "").strip()
+        unit_up = unit.upper()
+        if "HA" in unit_up:
+            unit_disp = "Ha"
+        elif "M2" in unit_up or "M²" in unit_up or unit_up == "M":
+            unit_disp = "m²"
+        elif unit:
+            unit_disp = unit
+        else:
+            unit_disp = ""
+        return f"{num} {unit_disp}".strip()
+    # 2) fallback: number + unit anywhere
+    m2 = re.search(r"([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s]*(" + unit_pattern + r")", s, flags=re.IGNORECASE)
+    if m2:
         num = m2.group(1)
-        unit = m2.group(2) or ""
-    else:
-        num = m.group(2)
-        unit = m.group(3) or ""
-    num = num.strip()
-    unit = unit.strip().replace(" ", "")
-    # normalize unit display
-    unit_up = unit.upper()
-    if "HA" in unit_up:
-        unit_disp = "Ha"
-    elif "M2" in unit_up or "M²" in unit_up or unit_up == "M":
-        unit_disp = "m²"
-    elif unit_disp := (unit if unit else ""):
-        unit_disp = unit
-    else:
-        unit_disp = ""
-    # Return the original-appearing string (number + unit)
-    return f"{num} {unit_disp}".strip()
+        unit = (m2.group(2) or "").strip()
+        unit_up = unit.upper()
+        if "HA" in unit_up:
+            unit_disp = "Ha"
+        else:
+            unit_disp = "m²" if ("M2" in unit_up or "M²" in unit_up or unit_up == "M") else unit
+        return f"{num} {unit_disp}".strip()
+    # 3) last resort: any standalone number
+    m3 = re.search(r"([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)", s)
+    if m3:
+        num = m3.group(1)
+        return num
+    return None
 
 def save_shapefile_layers(gdf_poly, gdf_points):
     """Save polygon and points as two shapefile layers in one ZIP (returns bytes)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         files = []
         if gdf_poly is not None and not gdf_poly.empty:
-            # write polygon to PKKPR_Polygon.*
             gdf_poly.to_crs(epsg=4326).to_file(os.path.join(tmpdir, "PKKPR_Polygon.shp"))
         if gdf_points is not None and not gdf_points.empty:
-            # write points to PKKPR_Points.*
             gdf_points.to_crs(epsg=4326).to_file(os.path.join(tmpdir, "PKKPR_Points.shp"))
-        # collect files
         for f in os.listdir(tmpdir):
             files.append(os.path.join(tmpdir, f))
         if not files:
@@ -144,10 +151,8 @@ def fix_geometry(gdf):
             continue
     return gdf
 
-# Helpers for parsing coordinates lines and tables (hierarchy)
 def extract_coords_from_line_pair(line):
     """Parse lines like '1 107.5794610744269 -7.043954965562468' or '107.57 -7.04'"""
-    # try with leading index
     m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
     if not m:
         m = re.match(r"^\s*([0-9\.\-]+)[\s,;]+([0-9\.\-]+)\s*$", line)
@@ -157,14 +162,12 @@ def extract_coords_from_line_pair(line):
         a = float(m.group(1)); b = float(m.group(2))
     except:
         return None
-    # decide if (lon,lat) or swapped
     if 95 <= a <= 141 and -11 <= b <= 6:
         return (a, b)
     if 95 <= b <= 141 and -11 <= a <= 6:
         return (b, a)
     return None
 
-# Projected detection helpers (keep feature for UTM-like inputs)
 def in_indonesia(lon, lat):
     lon_min, lon_max, lat_min, lat_max = INDO_BOUNDS
     return lon_min <= lon <= lon_max and lat_min <= lat <= lat_max
@@ -177,21 +180,18 @@ def try_zones_orders(easting, northing, zones=(46,47,48,49,50), prioritize_epsg=
             transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
         except Exception:
             continue
-        # try XY
         try:
             lon_xy, lat_xy = transformer.transform(easting, northing)
             if in_indonesia(lon_xy, lat_xy):
                 candidates.append({"epsg":epsg,"order":"xy","lon":lon_xy,"lat":lat_xy})
         except Exception:
             pass
-        # try YX
         try:
             lon_yx, lat_yx = transformer.transform(northing, easting)
             if in_indonesia(lon_yx, lat_yx):
                 candidates.append({"epsg":epsg,"order":"yx","lon":lon_yx,"lat":lat_yx})
         except Exception:
             pass
-    # prioritize 32748 if present
     candidates_sorted = sorted(candidates, key=lambda c: (0 if c["epsg"]==prioritize_epsg else 1))
     return candidates_sorted
 
@@ -229,10 +229,10 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
-            pages_texts.append(page.extract_text() or "")
-            table = page.extract_table()
             text = page.extract_text() or ""
-            # detect mode from lines first (affects following table rows)
+            pages_texts.append(text)
+            table = page.extract_table()
+            # detect mode from lines first
             mode = None
             for line in text.splitlines():
                 low = line.lower()
@@ -240,7 +240,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                     mode = "disetujui"
                 elif "koordinat" in low and "dimohon" in low:
                     mode = "dimohon"
-                # extract luas lines explicitly
+                # extract luas inline
                 if "luas tanah yang disetujui" in low and luas_disetujui is None:
                     luas_disetujui = parse_luas_line(line)
                 if "luas tanah yang dimohon" in low and luas_dimohon is None:
@@ -258,9 +258,8 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 
             # parse table rows (if present)
             if table:
-                # try to detect header mapping
                 header = None
-                if len(table) > 0 and any(cell and re.search(r"bujur|bujur|lintang|lintang", str(cell), flags=re.IGNORECASE) for cell in table[0]):
+                if len(table) > 0 and any(cell and re.search(r"bujur|lintang", str(cell), flags=re.IGNORECASE) for cell in table[0]):
                     header = [str(c).strip().lower() if c else "" for c in table[0]]
                     rows = table[1:]
                 else:
@@ -268,7 +267,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 for row in rows:
                     if not row:
                         continue
-                    # find numeric cells
                     nums = []
                     for cell in row:
                         if cell is None:
@@ -281,7 +279,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             except:
                                 pass
                     if len(nums) >= 2:
-                        # attempt to use header mapping if available
                         if header:
                             try:
                                 idx_bujur = next(i for i,v in enumerate(header) if "bujur" in v)
@@ -292,7 +289,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                                 lon, lat = nums[0], nums[1]
                         else:
                             lon, lat = nums[0], nums[1]
-                        # determine table context by scanning surrounding text of page for label
                         page_text_low = text.lower()
                         if "koordinat" in page_text_low and "disetujui" in page_text_low:
                             coords_disetujui.append((lon, lat))
@@ -303,13 +299,26 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 
     # fallback detection for luas (scan whole pages for any numeric+unit near 'luas')
     joined = "\n".join(pages_texts)
-    # detect patterns like "Luas tanah yang disetujui : 9.549 M²"
-    for line in joined.splitlines():
-        low = line.lower()
-        if "luas tanah yang disetujui" in low and luas_disetujui is None:
-            luas_disetujui = parse_luas_line(line)
-        if "luas tanah yang dimohon" in low and luas_dimohon is None:
-            luas_dimohon = parse_luas_line(line)
+    m_dis = re.search(r"luas\s+tanah\s+yang\s+disetujui[^\d\n\r]{0,40}[:\-–]?\s*([\d\.,]+)\s*(m2|m²|m\s*2|ha|hektar)?",
+                      joined, flags=re.IGNORECASE)
+    m_dim = re.search(r"luas\s+tanah\s+yang\s+dimohon[^\d\n\r]{0,40}[:\-–]?\s*([\d\.,]+)\s*(m2|m²|m\s*2|ha|hektar)?",
+                      joined, flags=re.IGNORECASE)
+    if m_dis and luas_disetujui is None:
+        num = m_dis.group(1)
+        unit = m_dis.group(2) or ""
+        luas_disetujui = f"{num} {unit.strip()}".strip()
+    if m_dim and luas_dimohon is None:
+        num = m_dim.group(1)
+        unit = m_dim.group(2) or ""
+        luas_dimohon = f"{num} {unit.strip()}".strip()
+    if luas_disetujui is None or luas_dimohon is None:
+        for line in joined.splitlines():
+            low = line.lower()
+            if "luas tanah yang disetujui" in low and luas_disetujui is None:
+                luas_disetujui = parse_luas_line(line)
+            if "luas tanah yang dimohon" in low and luas_dimohon is None:
+                luas_dimohon = parse_luas_line(line)
+
     return {
         "disetujui": coords_disetujui,
         "dimohon": coords_dimohon,
@@ -324,7 +333,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 col1, col2 = st.columns([0.7, 0.3])
 uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-# EPSG override if needed (kept as feature)
 epsg_override_input = st.sidebar.text_input("Override EPSG (mis. 32748) — kosong = auto-detect", value="")
 
 gdf_polygon = None
@@ -343,7 +351,7 @@ if uploaded_pkkpr:
             luas_disetujui = parsed["luas_disetujui"]
             luas_dimohon = parsed["luas_dimohon"]
 
-            # hierarchy: disetujui > dimohon > plain
+            # choose priority: disetujui > dimohon > plain
             if coords_disetujui:
                 coords_sel = coords_disetujui
                 luas_pkkpr_doc = luas_disetujui
@@ -357,12 +365,7 @@ if uploaded_pkkpr:
                 luas_pkkpr_doc = None
                 luas_label = "plain"
 
-            # keep luas as raw string if present
-            if luas_pkkpr_doc:
-                # luas_pkkpr_doc already looks like "9.549 M²" or similar
-                pass
-
-            # Determine projected vs geographic by magnitudes
+            # classify pairs
             projected_pairs = []
             geographic_pairs = []
             for a,b in coords_sel:
@@ -373,7 +376,6 @@ if uploaded_pkkpr:
 
             coords_final = []
             if len(projected_pairs) >= max(3, len(geographic_pairs)):
-                # try EPSG override first
                 epsg_override = int(epsg_override_input) if epsg_override_input.strip().isdigit() else None
                 transformed = None; chosen_epsg = None; chosen_order = None
                 if epsg_override:
@@ -408,7 +410,7 @@ if uploaded_pkkpr:
                     transformed, chosen_epsg, chosen_order = detect_projected_pairs_with_priority(projected_pairs, zones=(46,47,48,49,50), prioritize_epsg=32748)
                 if transformed is None:
                     st.warning("Koordinat metrik terdeteksi tetapi zona/proyeksi tidak berhasil dideteksi. Coba override EPSG di sidebar.")
-                    coords_final = projected_pairs  # fallback raw (may be incorrect)
+                    coords_final = projected_pairs
                     detected_info = {"mode":"projected (undetected)","n_points":len(coords_final)}
                 else:
                     coords_final = transformed
@@ -417,7 +419,7 @@ if uploaded_pkkpr:
                 coords_final = geographic_pairs
                 detected_info = {"mode":"geographic","n_points":len(coords_final)}
 
-            # Build GeoDataFrames (points + polygon) if coords exist
+            # Build GeoDataFrames
             if coords_final:
                 if coords_final[0] != coords_final[-1]:
                     coords_final.append(coords_final[0])
@@ -438,7 +440,21 @@ if uploaded_pkkpr:
             with tempfile.TemporaryDirectory() as tmp:
                 zf = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()))
                 zf.extractall(tmp)
-                gdf_polygon = gpd.read_file(tmp)
+                # try to read first vector file found
+                gdf_polygon = None
+                for root, dirs, files in os.walk(tmp):
+                    for fname in files:
+                        if fname.lower().endswith((".shp", ".geojson", ".gpkg")):
+                            try:
+                                gdf_polygon = gpd.read_file(os.path.join(root, fname))
+                                break
+                            except Exception:
+                                continue
+                    if gdf_polygon is not None:
+                        break
+                if gdf_polygon is None:
+                    # try reading folder as shapefile
+                    gdf_polygon = gpd.read_file(tmp)
                 if gdf_polygon.crs is None:
                     gdf_polygon.set_crs(epsg=4326, inplace=True)
                 gdf_polygon = fix_geometry(gdf_polygon)
@@ -466,7 +482,8 @@ if gdf_polygon is not None:
             st.info(f"{luas_pkkpr_doc}")
         else:
             st.write("Luas Dokumen PKKPR :")
-            st.info("")  # empty as in example
+            st.info("")
+
         # Luas geometri (UTM & Mercator)
         centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
@@ -501,7 +518,19 @@ if uploaded_tapak:
         with tempfile.TemporaryDirectory() as tmp:
             zf = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()))
             zf.extractall(tmp)
-            gdf_tapak = gpd.read_file(tmp)
+            gdf_tapak = None
+            for root, dirs, files in os.walk(tmp):
+                for fname in files:
+                    if fname.lower().endswith((".shp", ".geojson", ".gpkg")):
+                        try:
+                            gdf_tapak = gpd.read_file(os.path.join(root, fname))
+                            break
+                        except Exception:
+                            continue
+                if gdf_tapak is not None:
+                    break
+            if gdf_tapak is None:
+                gdf_tapak = gpd.read_file(tmp)
             if gdf_tapak.crs is None:
                 gdf_tapak.set_crs(epsg=4326, inplace=True)
             st.success("Shapefile Tapak terbaca.")
