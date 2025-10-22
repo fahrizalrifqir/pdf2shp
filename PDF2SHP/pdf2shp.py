@@ -24,11 +24,24 @@ st.markdown("---")
 
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
+# Tombol refresh manual
+if st.sidebar.button("🔄 Refresh Aplikasi"):
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    st.experimental_rerun()
+
 # ======================
 # === Fungsi Umum ===
 # ======================
 def normalize_text(s):
-    if not s: return s
+    if not s:
+        return s
     s = str(s)
     s = s.replace('\u2019', "'").replace('\u201d', '"').replace('\u201c', '"')
     s = s.replace('’', "'").replace('“', '"').replace('”', '"')
@@ -43,6 +56,7 @@ def get_utm_info(lon, lat):
 def save_shapefile(gdf):
     with tempfile.TemporaryDirectory() as tmp:
         out_path = os.path.join(tmp, "PKKPR_Output.shp")
+        # force to single geometry type earlier; gdf should already be polygon-only
         gdf.to_crs(epsg=4326).to_file(out_path)
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -89,7 +103,7 @@ def extract_coords_bt_ls_from_text(text):
         lon_raw, lat_raw = m.groups()
         lon = dms_bt_ls_to_decimal(lon_raw)
         lat = dms_bt_ls_to_decimal(lat_raw)
-        if lon and lat:
+        if lon is not None and lat is not None:
             coords.append((lon, lat))
     return coords
 
@@ -99,6 +113,7 @@ def extract_coords_from_text(text):
     pattern = r"(-?\d{1,3}\.\d+)[^\d\-\.,]+(-?\d{1,3}\.\d+)"
     for m in re.finditer(pattern, text):
         a, b = float(m.group(1)), float(m.group(2))
+        # Try interpret as (lon, lat) or swapped (lat, lon)
         if 90 <= abs(a) <= 145 and -11 <= b <= 6:
             out.append((a, b))
         elif 90 <= abs(b) <= 145 and -11 <= a <= 6:
@@ -108,6 +123,7 @@ def extract_coords_from_text(text):
 def extract_coords_comma_decimal(text):
     coords = []
     text = normalize_text(text)
+    # handle patterns like: 108,064739 -6,862542  or 108,064739\t-6,862542
     pattern = r"(\d{1,3},\d+)\s+(-?\d{1,2},\d+)"
     for m in re.finditer(pattern, text):
         lon_str, lat_str = m.groups()
@@ -126,8 +142,10 @@ def extract_coords_comma_decimal(text):
 def fix_polygon_geometry(gdf):
     if gdf is None or len(gdf) == 0:
         return gdf
+    gdf = gdf.copy()
     gdf["geometry"] = gdf["geometry"].apply(lambda g: make_valid(g))
     b = gdf.total_bounds
+    # If bounds obviously not lon/lat, attempt scaling heuristics
     if not (-180 <= b[0] <= 180 and -90 <= b[1] <= 90):
         for fac in [10, 100, 1000, 10000, 100000]:
             g2 = gdf.copy()
@@ -146,6 +164,10 @@ def ensure_polygon_only(gdf):
     return gdf
 
 def auto_fix_to_polygon(coords):
+    """
+    Hapus duplikat berurutan, tutup polygon, coba buat Polygon.
+    Jika gagal, gunakan convex hull dari titik.
+    """
     if not coords or len(coords) < 3:
         return None
     unique_coords = []
@@ -156,7 +178,7 @@ def auto_fix_to_polygon(coords):
         unique_coords.append(unique_coords[0])
     try:
         poly = Polygon(unique_coords)
-        if not poly.is_valid or poly.area == 0:
+        if (not poly.is_valid) or (poly.area == 0):
             pts = gpd.GeoSeries([Point(x, y) for x, y in unique_coords], crs="EPSG:4326")
             poly = pts.unary_union.convex_hull
         return poly
@@ -172,7 +194,7 @@ uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shape
 coords, gdf_points, gdf_polygon = [], None, None
 
 if uploaded_pkkpr:
-    if uploaded_pkkpr.name.endswith(".pdf"):
+    if uploaded_pkkpr.name.lower().endswith(".pdf"):
         try:
             text_full = ""
             with pdfplumber.open(uploaded_pkkpr) as pdf:
@@ -193,10 +215,14 @@ if uploaded_pkkpr:
                     col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik terdeteksi & polygon valid</p>", unsafe_allow_html=True)
                 else:
                     st.error("Koordinat tidak membentuk polygon yang valid.")
+            else:
+                st.error("Tidak ditemukan koordinat pada PDF.")
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
+            if DEBUG:
+                st.exception(e)
 
-    elif uploaded_pkkpr.name.endswith(".zip"):
+    elif uploaded_pkkpr.name.lower().endswith(".zip"):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), 'r')
@@ -208,26 +234,37 @@ if uploaded_pkkpr:
                 col2.markdown("<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ Shapefile (PKKPR)</p>", unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
+            if DEBUG:
+                st.exception(e)
 
 # ======================
 # === Hasil & Luas ===
 # ======================
 if gdf_polygon is not None:
     try:
+        # Pastikan polygon-only sebelum simpan
         gdf_polygon = ensure_polygon_only(gdf_polygon)
         zip_bytes = save_shapefile(gdf_polygon)
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", zip_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
     except Exception as e:
         st.error(f"Gagal menyiapkan shapefile: {e}")
+        if DEBUG:
+            st.exception(e)
 
     try:
         centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
         luas_pkkpr_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
         luas_pkkpr_mercator = gdf_polygon.to_crs(epsg=3857).area.sum()
-        st.info(f"**Analisis Luas Batas PKKPR**:\n- Luas (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n- Luas (WGS84 Mercator): **{format_angka_id(luas_pkkpr_mercator)} m²**")
+        st.info(
+            f"**Analisis Luas Batas PKKPR**:\n"
+            f"- Luas (UTM {utm_zone}): **{format_angka_id(luas_pkkpr_utm)} m²**\n"
+            f"- Luas (WGS84 Mercator): **{format_angka_id(luas_pkkpr_mercator)} m²**"
+        )
     except Exception as e:
         st.error(f"Gagal menghitung luas: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
 # ======================
@@ -248,6 +285,8 @@ if uploaded_tapak:
             col2.markdown("<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅</p>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
+        if DEBUG:
+            st.exception(e)
 
 # ======================
 # === Overlay ===
@@ -262,9 +301,16 @@ if gdf_polygon is not None and gdf_tapak is not None:
         luas_overlap = inter.area.sum() if not inter.empty else 0
         luas_tapak = gdf_tapak_utm.area.sum()
         luas_outside = luas_tapak - luas_overlap
-        st.success(f"**HASIL OVERLAY TAPAK:**\n- Luas Tapak UTM {utm_zone}: **{format_angka_id(luas_tapak)} m²**\n- Luas Tapak di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**\n- Luas Tapak Di luar PKKPR : **{format_angka_id(luas_outside)} m²**")
+        st.success(
+            f"**HASIL OVERLAY TAPAK:**\n"
+            f"- Luas Tapak UTM {utm_zone}: **{format_angka_id(luas_tapak)} m²**\n"
+            f"- Luas Tapak di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**\n"
+            f"- Luas Tapak Di luar PKKPR : **{format_angka_id(luas_outside)} m²**"
+        )
     except Exception as e:
         st.error(f"Gagal overlay: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
 # ======================
@@ -272,20 +318,25 @@ if gdf_polygon is not None and gdf_tapak is not None:
 # ======================
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
-    Fullscreen(position="bottomleft").add_to(m)
-    folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
-    folium.TileLayer("CartoDB Positron", name="CartoDB Positron").add_to(m)
-    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
-    folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
-    if gdf_tapak is not None:
-        folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
-    if gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black", fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
-    folium.LayerControl(collapsed=True).add_to(m)
-    st_folium(m, width=900, height=600)
+    try:
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
+        Fullscreen(position="bottomleft").add_to(m)
+        folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
+        folium.TileLayer("CartoDB Positron", name="CartoDB Positron").add_to(m)
+        folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
+        folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
+        if gdf_tapak is not None:
+            folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color": "red", "fillColor": "red", "fillOpacity": 0.4}).add_to(m)
+        if gdf_points is not None:
+            for i, row in gdf_points.iterrows():
+                folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black", fill=True, fill_color="orange", fill_opacity=1, popup=f"Titik {i+1}").add_to(m)
+        folium.LayerControl(collapsed=True).add_to(m)
+        st_folium(m, width=900, height=600)
+    except Exception as e:
+        st.error(f"Gagal membuat peta interaktif: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
 # ======================
@@ -334,26 +385,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         png_buffer.seek(0)
 
         st.download_button(
-            "⬇️
-
-                    "⬇️ Download Layout Peta (PNG)",
-                    png_buffer,
-                    "layout_peta.png",
-                    mime="image/png"
-                )
-
-    except Exception as e:
-        st.error(f"Gagal membuat layout peta: {e}")
-        if DEBUG:
-            st.exception(e)
-
-
-        png_buffer = io.BytesIO()
-        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        png_buffer.seek(0)
-
-        st.download_button(
             "⬇️ Download Layout Peta (PNG)",
             png_buffer,
             "layout_peta.png",
@@ -364,6 +395,3 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
-
-
-
