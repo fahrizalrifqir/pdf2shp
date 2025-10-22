@@ -331,3 +331,22 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         ]
         ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+                ax.set_axis_off()
+
+        png_buffer = io.BytesIO()
+        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        png_buffer.seek(0)
+
+        st.download_button(
+            "⬇️ Download Layout Peta (PNG)",
+            png_buffer,
+            "layout_peta.png",
+            mime="image/png"
+        )
+
+    except Exception as e:
+        st.error(f"Gagal membuat layout peta: {e}")
+        if DEBUG:
+            st.exception(e)
+
