@@ -51,6 +51,36 @@ def format_angka_id(value):
     except:
         return str(value)
 
+def parse_luas(line):
+    """
+    Ekstrak nilai luas numerik dari baris teks, misal:
+    'Luas tanah yang disetujui: 0,25 ha' -> 2500
+    'Luas = 2.500 m2' -> 2500
+    """
+    if not line:
+        return None
+    line = str(line)
+    match = re.search(r"([\d\.\,]+)\s*(m2|m²|m\s*2|ha|hektar)?", line, flags=re.IGNORECASE)
+    if not match:
+        return None
+    num_str, unit = match.groups()
+    if not num_str:
+        return None
+    # Normalisasi angka
+    if "." in num_str and "," in num_str:
+        num_str = num_str.replace(".", "").replace(",", ".")
+    elif "," in num_str:
+        num_str = num_str.replace(",", ".")
+    try:
+        val = float(num_str)
+    except:
+        return None
+    # Konversi unit
+    if unit and unit.lower().startswith("ha"):
+        val *= 10000
+    return val
+
+
 def save_shapefile(gdf_polygon, gdf_points=None):
     """Simpan dua shapefile (polygon & points) ke ZIP dan kembalikan bytes."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -716,3 +746,4 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
