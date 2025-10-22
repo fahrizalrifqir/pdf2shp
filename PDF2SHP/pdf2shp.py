@@ -24,6 +24,12 @@ st.markdown("---")
 
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
+# Tombol refresh manual
+if st.sidebar.button("🔄 Refresh Aplikasi"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
+
 # ======================
 # === Fungsi Umum ===
 # ======================
@@ -93,25 +99,6 @@ def extract_coords_bt_ls_from_text(text):
             coords.append((lon, lat))
     return coords
 
-def parse_coordinate(coord_str):
-    if coord_str is None:
-        return None
-    coord_str = normalize_text(str(coord_str)).strip().replace(",", ".")
-    if coord_str == "":
-        return None
-
-    # DMS umum
-    m_dms = re.match(r"^(\d{1,3})[°d\s](\d{1,3})['’\s](\d{1,3}(?:\.\d+)?)", coord_str)
-    if m_dms:
-        d, m, s = m_dms.groups()
-        return float(d) + float(m)/60 + float(s)/3600
-
-    # Desimal
-    m_dec = re.match(r"(-?\d{1,3}\.\d+)", coord_str)
-    if m_dec:
-        return float(m_dec.group(1))
-    return None
-
 def extract_coords_from_text(text):
     out = []
     text = normalize_text(text)
@@ -126,10 +113,6 @@ def extract_coords_from_text(text):
 
 # === Tambahan: Format Koordinat Desimal dengan Koma ===
 def extract_coords_comma_decimal(text):
-    """
-    Ekstraksi koordinat dengan format desimal menggunakan koma, contoh:
-    108,064739 -6,862542
-    """
     coords = []
     text = normalize_text(text)
     pattern = r"(\d{1,3},\d+)\s+(-?\d{1,2},\d+)"
@@ -161,6 +144,14 @@ def fix_polygon_geometry(gdf):
                 return g2.set_crs(epsg=4326, allow_override=True)
     return gdf
 
+def ensure_polygon_only(gdf):
+    gdf = gdf.copy()
+    gdf["geometry"] = gdf["geometry"].apply(lambda g: g if g.geom_type in ["Polygon", "MultiPolygon"] else None)
+    gdf = gdf[gdf["geometry"].notnull()]
+    if gdf.empty:
+        raise ValueError("Tidak ada geometri Polygon yang valid untuk disimpan.")
+    return gdf
+
 # ======================
 # === Upload File ===
 # ======================
@@ -168,20 +159,24 @@ col1, col2 = st.columns([0.7, 0.3])
 uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
 coords, gdf_points, gdf_polygon = [], None, None
-luas_pkkpr_doc = None
+
+@st.cache_data
+def parse_pdf(uploaded_pkkpr):
+    coords = []
+    text_full = ""
+    with pdfplumber.open(uploaded_pkkpr) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            text_full += "\n" + text
+            coords += extract_coords_bt_ls_from_text(text)
+            coords += extract_coords_from_text(text)
+            coords += extract_coords_comma_decimal(text)
+    return coords
 
 if uploaded_pkkpr:
     if uploaded_pkkpr.name.endswith(".pdf"):
         try:
-            text_full = ""
-            with pdfplumber.open(uploaded_pkkpr) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    text_full += "\n" + text
-                    coords += extract_coords_bt_ls_from_text(text)
-                    coords += extract_coords_from_text(text)
-                    coords += extract_coords_comma_decimal(text)
-
+            coords = parse_pdf(uploaded_pkkpr)
             if coords:
                 if coords[0] != coords[-1]:
                     coords.append(coords[0])
@@ -211,6 +206,7 @@ if uploaded_pkkpr:
 # ======================
 if gdf_polygon is not None:
     try:
+        gdf_polygon = ensure_polygon_only(gdf_polygon)
         zip_bytes = save_shapefile(gdf_polygon)
         st.download_button("⬇️ Download SHP PKKPR (ZIP)", zip_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
     except Exception as e:
@@ -284,8 +280,7 @@ if gdf_polygon is not None:
     st_folium(m, width=900, height=600)
     st.markdown("---")
 
-# ---
-# Layout Peta (PNG)
+# === Layout PNG ===
 if 'gdf_polygon' in locals() and gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
@@ -294,7 +289,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         width, height = xmax - xmin, ymax - ymin
 
         fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
-
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
 
         if gdf_tapak is not None:
@@ -305,16 +299,14 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
             gdf_points_3857 = gdf_points.to_crs(epsg=3857)
             gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
 
-        # Basemap (Esri World Imagery) via contextily
         try:
             ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         except Exception:
             if DEBUG:
-                st.write("Gagal memuat basemap Esri via contextily.")
+                st.write("Gagal memuat basemap Esri.")
 
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
-
         legend = [
             mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
@@ -329,12 +321,7 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         plt.close(fig)
         png_buffer.seek(0)
 
-        st.download_button(
-            "⬇️ Download Layout Peta (PNG)",
-            png_buffer,
-            "layout_peta.png",
-            mime="image/png"
-        )
+        st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
     except Exception as e:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
