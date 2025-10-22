@@ -111,7 +111,6 @@ def extract_coords_from_text(text):
             out.append((b, a))
     return out
 
-# === Tambahan: Format Koordinat Desimal dengan Koma ===
 def extract_coords_comma_decimal(text):
     coords = []
     text = normalize_text(text)
@@ -128,7 +127,7 @@ def extract_coords_comma_decimal(text):
     return coords
 
 # ======================
-# === Fungsi Fix Geometri ===
+# === Fungsi Geometri ===
 # ======================
 def fix_polygon_geometry(gdf):
     if gdf is None or len(gdf) == 0:
@@ -152,6 +151,24 @@ def ensure_polygon_only(gdf):
         raise ValueError("Tidak ada geometri Polygon yang valid untuk disimpan.")
     return gdf
 
+def auto_fix_to_polygon(coords):
+    if not coords or len(coords) < 3:
+        return None
+    unique_coords = []
+    for c in coords:
+        if not unique_coords or c != unique_coords[-1]:
+            unique_coords.append(c)
+    if unique_coords[0] != unique_coords[-1]:
+        unique_coords.append(unique_coords[0])
+    try:
+        poly = Polygon(unique_coords)
+        if not poly.is_valid or poly.area == 0:
+            pts = gpd.GeoSeries([Point(x, y) for x, y in unique_coords], crs="EPSG:4326")
+            poly = pts.unary_union.convex_hull
+        return poly
+    except Exception:
+        return None
+
 # ======================
 # === Upload File ===
 # ======================
@@ -163,11 +180,9 @@ coords, gdf_points, gdf_polygon = [], None, None
 @st.cache_data
 def parse_pdf(uploaded_pkkpr):
     coords = []
-    text_full = ""
     with pdfplumber.open(uploaded_pkkpr) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
-            text_full += "\n" + text
             coords += extract_coords_bt_ls_from_text(text)
             coords += extract_coords_from_text(text)
             coords += extract_coords_comma_decimal(text)
@@ -178,13 +193,15 @@ if uploaded_pkkpr:
         try:
             coords = parse_pdf(uploaded_pkkpr)
             if coords:
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
-                gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords, columns=["Lon", "Lat"]),
-                                              geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
-                gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
-                gdf_polygon = fix_polygon_geometry(gdf_polygon)
-                col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik terdeteksi</p>", unsafe_allow_html=True)
+                poly = auto_fix_to_polygon(coords)
+                if poly is not None:
+                    gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords, columns=["Lon", "Lat"]),
+                                                  geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
+                    gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                    gdf_polygon = fix_polygon_geometry(gdf_polygon)
+                    col2.markdown(f"<p style='color:green;font-weight:bold;padding-top:3.5rem;'>✅ {len(coords)} titik & polygon valid</p>", unsafe_allow_html=True)
+                else:
+                    st.error("Koordinat tidak membentuk polygon valid.")
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
 
@@ -314,15 +331,3 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         ]
         ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
-        ax.set_axis_off()
-
-        png_buffer = io.BytesIO()
-        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        png_buffer.seek(0)
-
-        st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
-    except Exception as e:
-        st.error(f"Gagal membuat layout peta: {e}")
-        if DEBUG:
-            st.exception(e)
