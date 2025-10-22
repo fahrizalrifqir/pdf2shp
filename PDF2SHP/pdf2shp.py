@@ -124,6 +124,26 @@ def extract_coords_from_text(text):
             out.append((b, a))
     return out
 
+# === Tambahan: Format Koordinat Desimal dengan Koma ===
+def extract_coords_comma_decimal(text):
+    """
+    Ekstraksi koordinat dengan format desimal menggunakan koma, contoh:
+    108,064739 -6,862542
+    """
+    coords = []
+    text = normalize_text(text)
+    pattern = r"(\d{1,3},\d+)\s+(-?\d{1,2},\d+)"
+    for m in re.finditer(pattern, text):
+        lon_str, lat_str = m.groups()
+        try:
+            lon = float(lon_str.replace(",", "."))
+            lat = float(lat_str.replace(",", "."))
+            if 90 <= lon <= 145 and -11 <= lat <= 6:
+                coords.append((lon, lat))
+        except:
+            continue
+    return coords
+
 # ======================
 # === Fungsi Fix Geometri ===
 # ======================
@@ -160,6 +180,7 @@ if uploaded_pkkpr:
                     text_full += "\n" + text
                     coords += extract_coords_bt_ls_from_text(text)
                     coords += extract_coords_from_text(text)
+                    coords += extract_coords_comma_decimal(text)
 
             if coords:
                 if coords[0] != coords[-1]:
@@ -288,7 +309,6 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
         try:
             ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         except Exception:
-            # Jika contextily tidak bisa load remote source, lewati quietly
             if DEBUG:
                 st.write("Gagal memuat basemap Esri via contextily.")
 
@@ -316,7 +336,4 @@ if 'gdf_polygon' in locals() and gdf_polygon is not None:
             mime="image/png"
         )
     except Exception as e:
-        st.error(f"Gagal membuat layout peta: {e}")
-        if DEBUG:
-            st.exception(e)
-
+        st.error(f"Gagal membuat layout peta:
