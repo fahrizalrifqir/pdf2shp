@@ -1,7 +1,8 @@
+# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-import io, os, zipfile, shutil, re, tempfile
+import io, os, zipfile, shutil, re, tempfile, math
 from shapely.geometry import Point, Polygon
 import folium
 from streamlit_folium import st_folium
@@ -17,27 +18,28 @@ from shapely import affinity
 from pyproj import Transformer
 
 # ======================
-# KONFIGURASI
+# CONFIG
 # ======================
-st.set_page_config(page_title="PKKPR → SHP + Overlay (Hirarki Final)", layout="wide")
-st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek (Hirarki Final)")
+st.set_page_config(page_title="PKKPR → SHP + Overlay (Final)", layout="wide")
+st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek (Final)")
 st.markdown("---")
-
 DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 
+# Constants
+PURWAKARTA_CENTER = (107.44, -6.56)
+INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
+
 # ======================
-# FUNGSI BANTUAN
+# HELPERS
 # ======================
 def normalize_text(s):
-    if not s: return s
-    s = str(s).replace('\u2019', "'").replace('\u201d', '"').replace('\u201c', '"')
-    s = s.replace('’', "'").replace('“', '"').replace('”', '"').replace('\xa0', ' ')
+    if not s:
+        return ""
+    s = str(s)
+    s = s.replace('\u2019', "'").replace('\u201d', '"').replace('\u201c', '"')
+    s = s.replace('’', "'").replace('“', '"').replace('”', '"')
+    s = s.replace('\xa0', ' ')
     return s
-
-def get_utm_info(lon, lat):
-    zone = int((lon + 180) / 6) + 1
-    epsg = 32600 + zone if lat >= 0 else 32700 + zone
-    return epsg, f"{zone}{'N' if lat >= 0 else 'S'}"
 
 def format_angka_id(value):
     try:
@@ -45,217 +47,549 @@ def format_angka_id(value):
         if abs(val - round(val)) < 0.001:
             return f"{int(round(val)):,}".replace(",", ".")
         else:
-            return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            # format with comma as decimal separator and dot as thousands
+            s = f"{val:,.2f}"
+            s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+            return s
     except:
         return str(value)
 
+def get_utm_info(lon, lat):
+    zone = int((lon + 180) / 6) + 1
+    epsg = 32600 + zone if lat >= 0 else 32700 + zone
+    zone_label = f"{zone}{'N' if lat >= 0 else 'S'}"
+    return epsg, zone_label
+
 def parse_luas_line(line):
-    """Ambil teks luas dan satuannya langsung dari dokumen"""
+    """Return raw-like luas string as in document (number + unit preserved when possible)."""
     if not line:
         return None
-    m = re.search(r"luas\s*tanah.*?([\d\.,]+)\s*([a-z²0-9 ]*)", line, flags=re.IGNORECASE)
+    s = line.strip()
+    # look for patterns like "luas ... 9.549 M²" or "luas ... 0,95 Ha"
+    m = re.search(r"(luas[^\d\n\r:]{0,20}[:\-–]?\s*)([\d\.\,]+)\s*([a-zA-Z²\s0-9]*)", s, flags=re.IGNORECASE)
     if not m:
-        return None
-    angka = m.group(1).strip()
-    satuan = m.group(2).replace(" ", "").upper()
-    # Normalisasi satuan agar tetap seperti di dokumen
-    if "HA" in satuan:
-        satuan = "Ha"
-    elif "M2" in satuan or "M²" in satuan or "M" in satuan:
-        satuan = "m²"
+        # try a simpler fallback: find number + unit anywhere
+        m2 = re.search(r"([\d\.\,]+)\s*(m2|m²|m\s*2|ha|hektar)?", s, flags=re.IGNORECASE)
+        if not m2:
+            return None
+        num = m2.group(1)
+        unit = m2.group(2) or ""
     else:
-        satuan = satuan or ""
-    return f"{angka} {satuan}".strip()
+        num = m.group(2)
+        unit = m.group(3) or ""
+    num = num.strip()
+    unit = unit.strip().replace(" ", "")
+    # normalize unit display
+    unit_up = unit.upper()
+    if "HA" in unit_up:
+        unit_disp = "Ha"
+    elif "M2" in unit_up or "M²" in unit_up or unit_up == "M":
+        unit_disp = "m²"
+    elif unit_disp := (unit if unit else ""):
+        unit_disp = unit
+    else:
+        unit_disp = ""
+    # Return the original-appearing string (number + unit)
+    return f"{num} {unit_disp}".strip()
 
-def save_shapefile_layers(gdf_poly, gdf_point):
+def save_shapefile_layers(gdf_poly, gdf_points):
+    """Save polygon and points as two shapefile layers in one ZIP (returns bytes)."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        gdf_poly.to_file(os.path.join(tmpdir, "PKKPR_Polygon.shp"))
-        gdf_point.to_file(os.path.join(tmpdir, "PKKPR_Point.shp"))
+        files = []
+        if gdf_poly is not None and not gdf_poly.empty:
+            # write polygon to PKKPR_Polygon.*
+            gdf_poly.to_crs(epsg=4326).to_file(os.path.join(tmpdir, "PKKPR_Polygon.shp"))
+        if gdf_points is not None and not gdf_points.empty:
+            # write points to PKKPR_Points.*
+            gdf_points.to_crs(epsg=4326).to_file(os.path.join(tmpdir, "PKKPR_Points.shp"))
+        # collect files
+        for f in os.listdir(tmpdir):
+            files.append(os.path.join(tmpdir, f))
+        if not files:
+            raise ValueError("Tidak ada geometri untuk disimpan.")
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in os.listdir(tmpdir):
-                zf.write(os.path.join(tmpdir, f), arcname=f)
+            for p in files:
+                zf.write(p, arcname=os.path.basename(p))
         buf.seek(0)
         return buf.read()
 
 def fix_geometry(gdf):
-    gdf["geometry"] = gdf["geometry"].apply(lambda g: make_valid(g))
-    b = gdf.total_bounds
-    if not (-180 <= b[0] <= 180 and -90 <= b[1] <= 90):
-        for fac in [10, 100, 1000, 10000]:
+    """Make geometries valid and try scaling heuristic if coordinates look metric-in-lon-lat."""
+    if gdf is None or gdf.empty:
+        return gdf
+    try:
+        gdf["geometry"] = gdf["geometry"].apply(lambda geom: make_valid(geom))
+    except Exception:
+        pass
+    try:
+        b = gdf.total_bounds
+    except Exception:
+        return gdf
+    # if already in lon/lat ranges -> set crs 4326
+    if (-180 <= b[0] <= 180) and (-90 <= b[1] <= 90):
+        try:
+            return gdf.set_crs(epsg=4326, allow_override=True)
+        except Exception:
+            return gdf
+    # try scale down heuristics
+    for fac in [10, 100, 1000, 10000, 100000]:
+        try:
             g2 = gdf.copy()
-            g2["geometry"] = g2["geometry"].apply(lambda g: affinity.scale(g, 1/fac, 1/fac, origin=(0,0)))
+            g2["geometry"] = g2["geometry"].apply(lambda geom: affinity.scale(geom, xfact=1/fac, yfact=1/fac, origin=(0,0)))
             b2 = g2.total_bounds
-            if 95 <= b2[0] <= 141 and -11 <= b2[1] <= 6:
+            if (95 <= b2[0] <= 145) and (-11 <= b2[1] <= 6):
                 return g2.set_crs(epsg=4326, allow_override=True)
+        except Exception:
+            continue
     return gdf
 
+# Helpers for parsing coordinates lines and tables (hierarchy)
+def extract_coords_from_line_pair(line):
+    """Parse lines like '1 107.5794610744269 -7.043954965562468' or '107.57 -7.04'"""
+    # try with leading index
+    m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
+    if not m:
+        m = re.match(r"^\s*([0-9\.\-]+)[\s,;]+([0-9\.\-]+)\s*$", line)
+    if not m:
+        return None
+    try:
+        a = float(m.group(1)); b = float(m.group(2))
+    except:
+        return None
+    # decide if (lon,lat) or swapped
+    if 95 <= a <= 141 and -11 <= b <= 6:
+        return (a, b)
+    if 95 <= b <= 141 and -11 <= a <= 6:
+        return (b, a)
+    return None
+
+# Projected detection helpers (keep feature for UTM-like inputs)
+def in_indonesia(lon, lat):
+    lon_min, lon_max, lat_min, lat_max = INDO_BOUNDS
+    return lon_min <= lon <= lon_max and lat_min <= lat <= lat_max
+
+def try_zones_orders(easting, northing, zones=(46,47,48,49,50), prioritize_epsg=32748):
+    candidates = []
+    for z in zones:
+        epsg = 32700 + z
+        try:
+            transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+        except Exception:
+            continue
+        # try XY
+        try:
+            lon_xy, lat_xy = transformer.transform(easting, northing)
+            if in_indonesia(lon_xy, lat_xy):
+                candidates.append({"epsg":epsg,"order":"xy","lon":lon_xy,"lat":lat_xy})
+        except Exception:
+            pass
+        # try YX
+        try:
+            lon_yx, lat_yx = transformer.transform(northing, easting)
+            if in_indonesia(lon_yx, lat_yx):
+                candidates.append({"epsg":epsg,"order":"yx","lon":lon_yx,"lat":lat_yx})
+        except Exception:
+            pass
+    # prioritize 32748 if present
+    candidates_sorted = sorted(candidates, key=lambda c: (0 if c["epsg"]==prioritize_epsg else 1))
+    return candidates_sorted
+
+def detect_projected_pairs_with_priority(pairs, zones=(46,47,48,49,50), prioritize_epsg=32748):
+    if not pairs:
+        return None, None, None
+    a_med, b_med = pairs[len(pairs)//2]
+    cand = try_zones_orders(a_med, b_med, zones=zones, prioritize_epsg=prioritize_epsg)
+    if not cand:
+        cand = try_zones_orders(b_med, a_med, zones=zones, prioritize_epsg=prioritize_epsg)
+        if not cand:
+            return None, None, None
+    chosen = cand[0]
+    chosen_epsg = chosen["epsg"]; chosen_order = chosen["order"]
+    transformer = Transformer.from_crs(f"EPSG:{chosen_epsg}", "EPSG:4326", always_xy=True)
+    out = []
+    for a,b in pairs:
+        if chosen_order == "xy":
+            lon, lat = transformer.transform(a,b)
+        else:
+            lon, lat = transformer.transform(b,a)
+        out.append((lon, lat))
+    return out, chosen_epsg, chosen_order
+
+# --------------------------
+# Extract tables & coords from PDF (hierarchy)
+# --------------------------
+def extract_tables_and_coords_from_pdf(uploaded_file):
+    coords_disetujui = []
+    coords_dimohon = []
+    coords_plain = []
+    luas_disetujui = None
+    luas_dimohon = None
+    pages_texts = []
+
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            pages_texts.append(page.extract_text() or "")
+            table = page.extract_table()
+            text = page.extract_text() or ""
+            # detect mode from lines first (affects following table rows)
+            mode = None
+            for line in text.splitlines():
+                low = line.lower()
+                if "koordinat" in low and "disetujui" in low:
+                    mode = "disetujui"
+                elif "koordinat" in low and "dimohon" in low:
+                    mode = "dimohon"
+                # extract luas lines explicitly
+                if "luas tanah yang disetujui" in low and luas_disetujui is None:
+                    luas_disetujui = parse_luas_line(line)
+                if "luas tanah yang dimohon" in low and luas_dimohon is None:
+                    luas_dimohon = parse_luas_line(line)
+                # parse coordinate-like lines
+                parsed = extract_coords_from_line_pair(line)
+                if parsed:
+                    x,y = parsed
+                    if mode == "disetujui":
+                        coords_disetujui.append((x,y))
+                    elif mode == "dimohon":
+                        coords_dimohon.append((x,y))
+                    else:
+                        coords_plain.append((x,y))
+
+            # parse table rows (if present)
+            if table:
+                # try to detect header mapping
+                header = None
+                if len(table) > 0 and any(cell and re.search(r"bujur|bujur|lintang|lintang", str(cell), flags=re.IGNORECASE) for cell in table[0]):
+                    header = [str(c).strip().lower() if c else "" for c in table[0]]
+                    rows = table[1:]
+                else:
+                    rows = table
+                for row in rows:
+                    if not row:
+                        continue
+                    # find numeric cells
+                    nums = []
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        cell_s = str(cell).strip()
+                        m = re.search(r"(-?\d{1,13}[\,\.\d]*)", cell_s)
+                        if m:
+                            try:
+                                nums.append(float(m.group(1).replace(",", ".")))
+                            except:
+                                pass
+                    if len(nums) >= 2:
+                        # attempt to use header mapping if available
+                        if header:
+                            try:
+                                idx_bujur = next(i for i,v in enumerate(header) if "bujur" in v)
+                                idx_lintang = next(i for i,v in enumerate(header) if "lintang" in v)
+                                lon = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_bujur])).group(1).replace(",", "."))
+                                lat = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_lintang])).group(1).replace(",", "."))
+                            except Exception:
+                                lon, lat = nums[0], nums[1]
+                        else:
+                            lon, lat = nums[0], nums[1]
+                        # determine table context by scanning surrounding text of page for label
+                        page_text_low = text.lower()
+                        if "koordinat" in page_text_low and "disetujui" in page_text_low:
+                            coords_disetujui.append((lon, lat))
+                        elif "koordinat" in page_text_low and "dimohon" in page_text_low:
+                            coords_dimohon.append((lon, lat))
+                        else:
+                            coords_plain.append((lon, lat))
+
+    # fallback detection for luas (scan whole pages for any numeric+unit near 'luas')
+    joined = "\n".join(pages_texts)
+    # detect patterns like "Luas tanah yang disetujui : 9.549 M²"
+    for line in joined.splitlines():
+        low = line.lower()
+        if "luas tanah yang disetujui" in low and luas_disetujui is None:
+            luas_disetujui = parse_luas_line(line)
+        if "luas tanah yang dimohon" in low and luas_dimohon is None:
+            luas_dimohon = parse_luas_line(line)
+    return {
+        "disetujui": coords_disetujui,
+        "dimohon": coords_dimohon,
+        "plain": coords_plain,
+        "luas_disetujui": luas_disetujui,
+        "luas_dimohon": luas_dimohon
+    }
+
 # ======================
-# UPLOAD FILE PKKPR
+# UI: Upload PKKPR
 # ======================
 col1, col2 = st.columns([0.7, 0.3])
 uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
-coords, luas_pkkpr_doc, luas_label = [], None, None
-gdf_polygon, gdf_points = None, None
+# EPSG override if needed (kept as feature)
+epsg_override_input = st.sidebar.text_input("Override EPSG (mis. 32748) — kosong = auto-detect", value="")
+
+gdf_polygon = None
+gdf_points = None
+luas_pkkpr_doc = None
+luas_label = None
+detected_info = {}
 
 if uploaded_pkkpr:
-    if uploaded_pkkpr.name.endswith(".pdf"):
-        coords_disetujui, coords_dimohon, coords_plain = [], [], []
-        luas_disetujui, luas_dimohon = None, None
-        mode = None
-
+    if uploaded_pkkpr.name.lower().endswith(".pdf"):
         try:
-            with pdfplumber.open(uploaded_pkkpr) as pdf:
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    text = page.extract_text() or ""
-                    for line in text.split("\n"):
-                        low = line.lower().strip()
+            parsed = extract_tables_and_coords_from_pdf(uploaded_pkkpr)
+            coords_disetujui = parsed["disetujui"]
+            coords_dimohon = parsed["dimohon"]
+            coords_plain = parsed["plain"]
+            luas_disetujui = parsed["luas_disetujui"]
+            luas_dimohon = parsed["luas_dimohon"]
 
-                        # Deteksi luas langsung dari dokumen
-                        if "luas tanah yang disetujui" in low and not luas_disetujui:
-                            luas_disetujui = parse_luas_line(line)
-                        elif "luas tanah yang dimohon" in low and not luas_dimohon:
-                            luas_dimohon = parse_luas_line(line)
-
-                        # Ubah mode sesuai label
-                        if "koordinat" in low and "disetujui" in low:
-                            mode = "disetujui"
-                        elif "koordinat" in low and "dimohon" in low:
-                            mode = "dimohon"
-
-                        # Ambil dari baris teks
-                        m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
-                        if m:
-                            try:
-                                x, y = float(m.group(1)), float(m.group(2))
-                                if 95 <= x <= 141 and -11 <= y <= 6:
-                                    if mode == "disetujui": coords_disetujui.append((x, y))
-                                    elif mode == "dimohon": coords_dimohon.append((x, y))
-                                    else: coords_plain.append((x, y))
-                            except: pass
-
-                    # Ambil dari tabel (kalau ada)
-                    if table:
-                        for row in table:
-                            if len(row) >= 3:
-                                try:
-                                    x, y = float(row[1]), float(row[2])
-                                    if 95 <= x <= 141 and -11 <= y <= 6:
-                                        if mode == "disetujui": coords_disetujui.append((x, y))
-                                        elif mode == "dimohon": coords_dimohon.append((x, y))
-                                        else: coords_plain.append((x, y))
-                                except: continue
-
-            # Pilih sesuai hirarki
+            # hierarchy: disetujui > dimohon > plain
             if coords_disetujui:
-                coords = coords_disetujui
-                luas_pkkpr_doc, luas_label = luas_disetujui, "disetujui"
+                coords_sel = coords_disetujui
+                luas_pkkpr_doc = luas_disetujui
+                luas_label = "disetujui"
             elif coords_dimohon:
-                coords = coords_dimohon
-                luas_pkkpr_doc, luas_label = luas_dimohon, "dimohon"
-            elif coords_plain:
-                coords = coords_plain
-                luas_pkkpr_doc, luas_label = None, "tanpa label"
-
-            if coords:
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
-                gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords, columns=["Lon", "Lat"]),
-                                              geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
-                gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
-                gdf_polygon = fix_geometry(gdf_polygon)
-                st.success(f"✅ {len(coords)} titik terdeteksi ({luas_label})")
+                coords_sel = coords_dimohon
+                luas_pkkpr_doc = luas_dimohon
+                luas_label = "dimohon"
             else:
-                st.warning("Tidak ada koordinat yang valid ditemukan di PDF.")
+                coords_sel = coords_plain
+                luas_pkkpr_doc = None
+                luas_label = "plain"
 
+            # keep luas as raw string if present
+            if luas_pkkpr_doc:
+                # luas_pkkpr_doc already looks like "9.549 M²" or similar
+                pass
+
+            # Determine projected vs geographic by magnitudes
+            projected_pairs = []
+            geographic_pairs = []
+            for a,b in coords_sel:
+                if abs(a) > 1000 or abs(b) > 1000:
+                    projected_pairs.append((a,b))
+                else:
+                    geographic_pairs.append((a,b))
+
+            coords_final = []
+            if len(projected_pairs) >= max(3, len(geographic_pairs)):
+                # try EPSG override first
+                epsg_override = int(epsg_override_input) if epsg_override_input.strip().isdigit() else None
+                transformed = None; chosen_epsg = None; chosen_order = None
+                if epsg_override:
+                    try:
+                        ttest = Transformer.from_crs(f"EPSG:{epsg_override}", "EPSG:4326", always_xy=True)
+                        sample = projected_pairs[len(projected_pairs)//2]
+                        try:
+                            lon_xy, lat_xy = ttest.transform(sample[0], sample[1])
+                            if in_indonesia(lon_xy, lat_xy):
+                                chosen_epsg = epsg_override; chosen_order = "xy"
+                        except:
+                            pass
+                        if chosen_epsg is None:
+                            try:
+                                lon_yx, lat_yx = ttest.transform(sample[1], sample[0])
+                                if in_indonesia(lon_yx, lat_yx):
+                                    chosen_epsg = epsg_override; chosen_order = "yx"
+                            except:
+                                pass
+                        if chosen_epsg:
+                            t = Transformer.from_crs(f"EPSG:{chosen_epsg}", "EPSG:4326", always_xy=True)
+                            transformed = []
+                            for a,b in projected_pairs:
+                                if chosen_order=="xy":
+                                    lon,lat = t.transform(a,b)
+                                else:
+                                    lon,lat = t.transform(b,a)
+                                transformed.append((lon,lat))
+                    except Exception:
+                        transformed = None
+                if transformed is None:
+                    transformed, chosen_epsg, chosen_order = detect_projected_pairs_with_priority(projected_pairs, zones=(46,47,48,49,50), prioritize_epsg=32748)
+                if transformed is None:
+                    st.warning("Koordinat metrik terdeteksi tetapi zona/proyeksi tidak berhasil dideteksi. Coba override EPSG di sidebar.")
+                    coords_final = projected_pairs  # fallback raw (may be incorrect)
+                    detected_info = {"mode":"projected (undetected)","n_points":len(coords_final)}
+                else:
+                    coords_final = transformed
+                    detected_info = {"mode":"projected","epsg":chosen_epsg,"order":chosen_order,"n_points":len(coords_final)}
+            else:
+                coords_final = geographic_pairs
+                detected_info = {"mode":"geographic","n_points":len(coords_final)}
+
+            # Build GeoDataFrames (points + polygon) if coords exist
+            if coords_final:
+                if coords_final[0] != coords_final[-1]:
+                    coords_final.append(coords_final[0])
+                gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords_final, columns=["Lon","Lat"]),
+                                              geometry=[Point(x,y) for x,y in coords_final], crs="EPSG:4326")
+                poly = Polygon(coords_final)
+                gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                gdf_polygon = fix_geometry(gdf_polygon)
+            else:
+                st.warning("Tidak ada koordinat terpilih dari dokumen.")
         except Exception as e:
             st.error(f"Gagal memproses PDF: {e}")
+            if DEBUG:
+                st.exception(e)
 
-    elif uploaded_pkkpr.name.endswith(".zip"):
+    elif uploaded_pkkpr.name.lower().endswith(".zip"):
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                zip_ref = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()), 'r')
-                zip_ref.extractall(tmp)
+                zf = zipfile.ZipFile(io.BytesIO(uploaded_pkkpr.read()))
+                zf.extractall(tmp)
                 gdf_polygon = gpd.read_file(tmp)
                 if gdf_polygon.crs is None:
                     gdf_polygon.set_crs(epsg=4326, inplace=True)
                 gdf_polygon = fix_geometry(gdf_polygon)
-                st.success("✅ Shapefile PKKPR terbaca")
+                st.success("Shapefile PKKPR terbaca dari ZIP.")
         except Exception as e:
             st.error(f"Gagal membaca shapefile PKKPR: {e}")
+            if DEBUG:
+                st.exception(e)
+
+# show detection info
+if detected_info:
+    st.sidebar.markdown("### Hasil Deteksi Koordinat")
+    for k,v in detected_info.items():
+        st.sidebar.write(f"- **{k}**: {v}")
 
 # ======================
-# ANALISIS LUAS
+# ANALISIS LUAS (OUTPUT FORMAT sesuai permintaan)
 # ======================
 if gdf_polygon is not None:
     try:
-        centroid = gdf_polygon.geometry.centroid.iloc[0]
+        st.markdown("### Analisis Luas Geometri\n")
+        # Luas Dokumen (tampilkan sesuai dokumen, kosong jika tidak ada)
+        if luas_pkkpr_doc:
+            st.write("Luas Dokumen PKKPR :")
+            st.info(f"{luas_pkkpr_doc}")
+        else:
+            st.write("Luas Dokumen PKKPR :")
+            st.info("")  # empty as in example
+        # Luas geometri (UTM & Mercator)
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
         luas_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
         luas_merc = gdf_polygon.to_crs(epsg=3857).area.sum()
-        if luas_pkkpr_doc:
-            st.info(f"📏 **Luas PKKPR (dari dokumen, {luas_label})**: {luas_pkkpr_doc}")
-        st.success(f"**Analisis Luas Geometri**\n- Luas (UTM {utm_zone}): {format_angka_id(luas_utm)} m²\n- Luas (Mercator): {format_angka_id(luas_merc)} m²")
+        st.write("")  # spacer
+        st.write(f"Luas PKKPR (UTM {utm_zone}): {format_angka_id(luas_utm)} m²")
+        st.write(f"Luas PKKPR (Mercator): {format_angka_id(luas_merc)} m²")
     except Exception as e:
         st.error(f"Gagal menghitung luas: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
+    # Export shapefile (two layers in zip)
     try:
         zip_bytes = save_shapefile_layers(gdf_polygon, gdf_points)
         st.download_button("⬇️ Download SHP PKKPR (Polygon + Point)", zip_bytes, "PKKPR_Hasil_Konversi.zip", mime="application/zip")
     except Exception as e:
         st.error(f"Gagal menyiapkan shapefile: {e}")
+        if DEBUG:
+            st.exception(e)
 
 # ======================
-# PETA INTERAKTIF
+# Upload Tapak Proyek (overlay)
 # ======================
-if gdf_polygon is not None:
-    st.subheader("🌍 Peta Interaktif")
-    centroid = gdf_polygon.geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
-    Fullscreen(position="bottomleft").add_to(m)
-    folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
-    folium.TileLayer("CartoDB Positron", name="CartoDB Positron").add_to(m)
-    folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
-    folium.GeoJson(gdf_polygon, name="PKKPR Polygon",
-                   style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.1}).add_to(m)
-    if gdf_points is not None:
-        for i, row in gdf_points.iterrows():
-            folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4,
-                                color="black", fill=True, fill_color="orange",
-                                popup=f"Titik {i+1}").add_to(m)
-    folium.LayerControl(collapsed=True).add_to(m)
-    st_folium(m, width=900, height=600)
+col1, col2 = st.columns([0.7, 0.3])
+uploaded_tapak = col1.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"], key="tapak")
+gdf_tapak = None
+if uploaded_tapak:
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            zf = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()))
+            zf.extractall(tmp)
+            gdf_tapak = gpd.read_file(tmp)
+            if gdf_tapak.crs is None:
+                gdf_tapak.set_crs(epsg=4326, inplace=True)
+            st.success("Shapefile Tapak terbaca.")
+    except Exception as e:
+        st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
+        if DEBUG:
+            st.exception(e)
+
+if gdf_polygon is not None and gdf_tapak is not None:
+    try:
+        centroid_t = gdf_tapak.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        utm_epsg_t, utm_zone_t = get_utm_info(centroid_t.x, centroid_t.y)
+        gdf_tapak_utm = gdf_tapak.to_crs(epsg=utm_epsg_t)
+        gdf_polygon_utm = gdf_polygon.to_crs(epsg=utm_epsg_t)
+        inter = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection")
+        luas_overlap = inter.area.sum() if not inter.empty else 0
+        luas_tapak = gdf_tapak_utm.area.sum()
+        luas_outside = luas_tapak - luas_overlap
+        st.success(f"**HASIL OVERLAY TAPAK:**\n- Luas Tapak UTM {utm_zone_t}: **{format_angka_id(luas_tapak)} m²**\n- Luas Tapak di dalam PKKPR: **{format_angka_id(luas_overlap)} m²**\n- Luas Tapak Di luar PKKPR : **{format_angka_id(luas_outside)} m²**")
+    except Exception as e:
+        st.error(f"Gagal overlay: {e}")
+        if DEBUG:
+            st.exception(e)
     st.markdown("---")
 
 # ======================
-# LAYOUT PNG
+# Interactive map
 # ======================
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG)")
+    st.subheader("🌍 Preview Peta Interaktif")
+    try:
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
+        Fullscreen(position="bottomleft").add_to(m)
+        folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
+        folium.TileLayer("CartoDB Positron", name="CartoDB Positron").add_to(m)
+        folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
+        folium.GeoJson(gdf_polygon.to_crs(epsg=4326), name="PKKPR", style_function=lambda x: {"color":"yellow","weight":3,"fillOpacity":0.1}).add_to(m)
+        if gdf_points is not None:
+            for i, row in gdf_points.iterrows():
+                folium.CircleMarker([row.geometry.y, row.geometry.x], radius=4, color="black", fill=True, fill_color="orange", popup=f"Titik {i+1}").add_to(m)
+        if gdf_tapak is not None:
+            folium.GeoJson(gdf_tapak.to_crs(epsg=4326), name="Tapak Proyek", style_function=lambda x: {"color":"red","fillColor":"red","fillOpacity":0.4}).add_to(m)
+        folium.LayerControl(collapsed=True).add_to(m)
+        st_folium(m, width=900, height=600)
+    except Exception as e:
+        st.error(f"Gagal membuat peta interaktif: {e}")
+        if DEBUG:
+            st.exception(e)
+    st.markdown("---")
+
+# ======================
+# Layout PNG
+# ======================
+if gdf_polygon is not None:
+    st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
         width, height = xmax - xmin, ymax - ymin
         fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
+        if gdf_tapak is not None:
+            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+            gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
         if gdf_points is not None:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         try:
             ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
-        except: pass
+        except Exception:
+            if DEBUG:
+                st.write("Gagal memuat basemap Esri via contextily.")
+        ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
+        ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
         legend = [
-            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="Batas PKKPR"),
-            mlines.Line2D([], [], color="orange", marker="o", linestyle="None", label="Titik PKKPR")
+            mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
+            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+            mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
         ]
         ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
         ax.set_axis_off()
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-        buf.seek(0)
-        st.download_button("⬇️ Download Layout Peta (PNG)", buf, "layout_peta.png", mime="image/png")
+        png_buffer = io.BytesIO()
+        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        png_buffer.seek(0)
+        st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
     except Exception as e:
         st.error(f"Gagal membuat layout peta: {e}")
+        if DEBUG:
+            st.exception(e)
