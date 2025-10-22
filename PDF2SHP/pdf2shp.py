@@ -122,7 +122,9 @@ def save_shapefile_layers(gdf_poly, gdf_points):
         return buf.read()
 
 def fix_geometry(gdf):
-    """Make geometries valid and try scaling heuristic if coordinates look metric-in-lon-lat."""
+    """Make geometries valid and try scaling heuristic if coordinates look metric-in-lon-lat.
+       IMPORTANT: scaling is done around centroid to avoid translation.
+    """
     if gdf is None or gdf.empty:
         return gdf
     try:
@@ -139,15 +141,35 @@ def fix_geometry(gdf):
             return gdf.set_crs(epsg=4326, allow_override=True)
         except Exception:
             return gdf
-    # try scale down heuristics
+    # try scale down heuristics (scale around centroid to avoid translation)
+    try:
+        centroid = gdf.geometry.unary_union.centroid
+    except Exception:
+        centroid = None
     for fac in [10, 100, 1000, 10000, 100000]:
         try:
             g2 = gdf.copy()
-            g2["geometry"] = g2["geometry"].apply(lambda geom: affinity.scale(geom, xfact=1/fac, yfact=1/fac, origin=(0,0)))
+            if centroid is not None:
+                origin = (centroid.x, centroid.y)
+            else:
+                origin = (0, 0)
+            g2["geometry"] = g2["geometry"].apply(lambda geom: affinity.scale(geom, xfact=1/fac, yfact=1/fac, origin=origin))
             b2 = g2.total_bounds
+            if DEBUG:
+                try:
+                    st.sidebar.write(f"DEBUG: try scale 1/{fac} -> bounds {b2}")
+                except Exception:
+                    pass
             if (95 <= b2[0] <= 145) and (-11 <= b2[1] <= 6):
-                return g2.set_crs(epsg=4326, allow_override=True)
-        except Exception:
+                try:
+                    if DEBUG:
+                        st.sidebar.write(f"DEBUG: Rescale berhasil dengan factor {fac}. New bounds: {b2}")
+                    return g2.set_crs(epsg=4326, allow_override=True)
+                except Exception:
+                    return g2
+        except Exception as e:
+            if DEBUG:
+                st.sidebar.write(f"DEBUG: rescale gagal untuk fac {fac}: {e}")
             continue
     return gdf
 
@@ -455,8 +477,26 @@ if uploaded_pkkpr:
                 if gdf_polygon is None:
                     # try reading folder as shapefile
                     gdf_polygon = gpd.read_file(tmp)
+
+                # --- Heuristik CRS: jangan langsung set_crs(4326) jika .crs None ---
                 if gdf_polygon.crs is None:
-                    gdf_polygon.set_crs(epsg=4326, inplace=True)
+                    try:
+                        b = gdf_polygon.total_bounds  # [minx, miny, maxx, maxy]
+                        minx, miny, maxx, maxy = b
+                        # Jika nilai dalam rentang lon/lat maka set sebagai 4326,
+                        # jika tidak, asumsi projected (meter) dan jangan paksa 4326.
+                        if (-180 <= minx <= 180) and (-90 <= miny <= 90) and (-180 <= maxx <= 180) and (-90 <= maxy <= 90):
+                            gdf_polygon.set_crs(epsg=4326, inplace=True)
+                            if DEBUG:
+                                st.sidebar.write("DEBUG: CRS tidak ditemukan — bounds menyerupai lon/lat, set CRS=4326.")
+                        else:
+                            # kemungkinan data dalam satuan meter/projected; biarkan crs None untuk diproses lebih lanjut
+                            if DEBUG:
+                                st.sidebar.write("DEBUG: CRS tidak ditemukan — bounds menunjukkan koordinat projected (meter). Tidak memaksa EPSG:4326.")
+                    except Exception as e:
+                        if DEBUG:
+                            st.sidebar.write("DEBUG: heuristik CRS gagal:", e)
+
                 gdf_polygon = fix_geometry(gdf_polygon)
                 st.success("Shapefile PKKPR terbaca dari ZIP.")
         except Exception as e:
@@ -469,6 +509,23 @@ if detected_info:
     st.sidebar.markdown("### Hasil Deteksi Koordinat")
     for k,v in detected_info.items():
         st.sidebar.write(f"- **{k}**: {v}")
+
+# Additional debug info for loaded GDF
+if DEBUG and 'gdf_polygon' in globals() and gdf_polygon is not None:
+    try:
+        st.sidebar.markdown("### DEBUG: Info GDF Polygon")
+        st.sidebar.write("CRS (gdf_polygon.crs):", getattr(gdf_polygon, "crs", None))
+        try:
+            st.sidebar.write("Bounds (total_bounds):", gdf_polygon.total_bounds)
+        except Exception as e:
+            st.sidebar.write("Bounds: error -", e)
+        try:
+            centroid_tmp = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+            st.sidebar.write("Centroid (lon,lat) setelah to_crs(4326):", (centroid_tmp.x, centroid_tmp.y))
+        except Exception as e:
+            st.sidebar.write("Centroid (to_crs): error -", e)
+    except Exception:
+        pass
 
 # ======================
 # ANALISIS LUAS (OUTPUT FORMAT sesuai permintaan)
@@ -485,13 +542,30 @@ if gdf_polygon is not None:
             st.info("")
 
         # Luas geometri (UTM & Mercator)
-        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        # safe centroid: jika gdf_polygon crs known use it, else assume 4326
+        try:
+            centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        except Exception:
+            centroid = gdf_polygon.geometry.centroid.iloc[0]
         utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
-        luas_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
-        luas_merc = gdf_polygon.to_crs(epsg=3857).area.sum()
+        try:
+            luas_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
+        except Exception:
+            luas_utm = None
+        try:
+            luas_merc = gdf_polygon.to_crs(epsg=3857).area.sum()
+        except Exception:
+            luas_merc = None
+
         st.write("")  # spacer
-        st.write(f"Luas PKKPR (UTM {utm_zone}): {format_angka_id(luas_utm)} m²")
-        st.write(f"Luas PKKPR (Mercator): {format_angka_id(luas_merc)} m²")
+        if luas_utm is not None:
+            st.write(f"Luas PKKPR (UTM {utm_zone}): {format_angka_id(luas_utm)} m²")
+        else:
+            st.write("Luas PKKPR (UTM): Gagal menghitung (cek CRS).")
+        if luas_merc is not None:
+            st.write(f"Luas PKKPR (Mercator): {format_angka_id(luas_merc)} m²")
+        else:
+            st.write("Luas PKKPR (Mercator): Gagal menghitung (cek CRS).")
     except Exception as e:
         st.error(f"Gagal menghitung luas: {e}")
         if DEBUG:
@@ -531,8 +605,21 @@ if uploaded_tapak:
                     break
             if gdf_tapak is None:
                 gdf_tapak = gpd.read_file(tmp)
+            # Heuristik serupa untuk tapak: only set 4326 if bounds look like lon/lat
             if gdf_tapak.crs is None:
-                gdf_tapak.set_crs(epsg=4326, inplace=True)
+                try:
+                    b2 = gdf_tapak.total_bounds
+                    minx, miny, maxx, maxy = b2
+                    if (-180 <= minx <= 180) and (-90 <= miny <= 90) and (-180 <= maxx <= 180) and (-90 <= maxy <= 90):
+                        gdf_tapak.set_crs(epsg=4326, inplace=True)
+                        if DEBUG:
+                            st.sidebar.write("DEBUG: Tapak CRS undetected -> set 4326 (lon/lat bounds).")
+                    else:
+                        if DEBUG:
+                            st.sidebar.write("DEBUG: Tapak CRS undetected -> assume projected (meter). Not forcing 4326.")
+                except Exception as e:
+                    if DEBUG:
+                        st.sidebar.write("DEBUG: heuristik CRS tapak gagal:", e)
             st.success("Shapefile Tapak terbaca.")
     except Exception as e:
         st.error(f"Gagal membaca shapefile Tapak Proyek: {e}")
@@ -562,7 +649,11 @@ if gdf_polygon is not None and gdf_tapak is not None:
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     try:
-        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        # centroid safe conversion
+        try:
+            centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        except Exception:
+            centroid = gdf_polygon.geometry.centroid.iloc[0]
         m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
         Fullscreen(position="bottomleft").add_to(m)
         folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
