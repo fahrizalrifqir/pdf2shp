@@ -168,6 +168,35 @@ def auto_fix_to_polygon(coords):
         return poly
     except Exception:
         return None
+# -------------------------
+# Fix Geometri Polygon
+# -------------------------
+def fix_polygon_geometry(gdf):
+    """Pastikan geometri polygon valid & dalam skala wajar (Indonesia)."""
+    if gdf is None or len(gdf) == 0:
+        return gdf
+    try:
+        gdf["geometry"] = gdf["geometry"].apply(lambda g: make_valid(g))
+    except Exception:
+        pass
+
+    # cek apakah sudah koordinat geografis (lon/lat)
+    b = gdf.total_bounds
+    if (-180 <= b[0] <= 180) and (-90 <= b[1] <= 90):
+        return gdf.set_crs(epsg=4326, allow_override=True)
+
+    # jika angka terlalu besar (koordinat metrik), coba skala ulang
+    for fac in [10, 100, 1000, 10000, 100000]:
+        g2 = gdf.copy()
+        g2["geometry"] = g2["geometry"].apply(
+            lambda g: affinity.scale(g, xfact=1/fac, yfact=1/fac, origin=(0, 0))
+        )
+        b2 = g2.total_bounds
+        if (95 <= b2[0] <= 145) and (-11 <= b2[1] <= 6):
+            return g2.set_crs(epsg=4326, allow_override=True)
+
+    # fallback — tetap kembalikan gdf asli
+    return gdf
 
 # -------------------------
 # UTM detection (zones 46-50S) with XY/YX test and Purwakarta prioritization
@@ -508,3 +537,4 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
