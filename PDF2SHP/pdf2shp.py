@@ -203,7 +203,7 @@ if uploaded_tapak and gdf_polygon is not None:
                     gdf_tapak = gpd.read_file(os.path.join(root, f))
                     break
                     
-    st.subheader("📏 Analisis Luas Overlay")
+    st.subheader("Analisis Luas Overlay (UTM {utm_zone})")
     gdf_tapak = fix_geometry(gdf_tapak)
     utm_epsg, utm_zone = get_utm_info(*gdf_polygon.to_crs(4326).geometry.centroid.iloc[0].coords[0])
     gdf_tapak_utm = gdf_tapak.to_crs(utm_epsg)
@@ -212,8 +212,8 @@ if uploaded_tapak and gdf_polygon is not None:
     luas_tapak = gdf_tapak_utm.area.sum()
     luas_overlap = inter.area.sum()
     st.success(f"Luas Tapak: {format_angka_id(luas_tapak)} m²\n\n"
-               f"Di dalam PKKPR: {format_angka_id(luas_overlap)} m²\n\n"
-               f"Di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
+               f"Luas Tapak di dalam PKKPR: {format_angka_id(luas_overlap)} m²\n\n"
+               f"Luas Tapak di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
 
 # =====================================================
 # Layout PNG — hanya tombol download
@@ -243,4 +243,5 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout PNG: {e}")
         if DEBUG:
             st.exception(e)
+
 
