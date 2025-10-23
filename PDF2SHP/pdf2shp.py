@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -17,9 +16,7 @@ from shapely.validation import make_valid
 from shapely import affinity
 from pyproj import Transformer
 
-# ======================
 # CONFIG
-# ======================
 st.set_page_config(page_title="PKKPR → SHP + Overlay (Final)", layout="wide")
 st.title("PKKPR → Shapefile Converter & Overlay Tapak Proyek (Final)")
 st.markdown("---")
@@ -29,9 +26,7 @@ DEBUG = st.sidebar.checkbox("Tampilkan debug logs", value=False)
 PURWAKARTA_CENTER = (107.44, -6.56)
 INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
 
-# ======================
 # HELPERS
-# ======================
 def normalize_text(s):
     if not s:
         return ""
@@ -113,9 +108,7 @@ def save_shapefile_layers(gdf_poly, gdf_points):
         buf.seek(0)
         return buf.read()
 
-# =====================================================
 # FIX GEOMETRY — perbaikan shapefile GeometryCollection
-# =====================================================
 def fix_geometry(gdf):
     if gdf is None or gdf.empty:
         return gdf
@@ -169,9 +162,7 @@ def fix_geometry(gdf):
             continue
     return gdf
 
-# =====================================================
 # IMPROVED COORD PARSER (PDF OSS tolerant)
-# =====================================================
 def extract_coords_from_line_pair(line):
     """
     Parse koordinat dari baris PDF OSS — toleran terhadap spasi hilang antar angka.
@@ -245,9 +236,7 @@ def detect_projected_pairs_with_priority(pairs, zones=(46,47,48,49,50), prioriti
         out.append((lon, lat))
     return out, chosen_epsg, chosen_order
 
-# --------------------------
 # Extract tables & coords from PDF (hierarchy)
-# --------------------------
 def extract_tables_and_coords_from_pdf(uploaded_file):
     coords_disetujui = []
     coords_dimohon = []
@@ -328,7 +317,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                                     # Nilai (dan header) sudah benar
                                     lon, lat = lon_val, lat_val
                                 # === SELESAI BLOK PERBAIKAN ===
-                                # ================================================
 
                             except Exception:
                                 lon, lat = nums[0], nums[1]
@@ -372,9 +360,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
         "luas_dimohon": luas_dimohon
     }
 
-# ======================
 # UI: Upload PKKPR
-# ======================
 col1, col2 = st.columns([0.7, 0.3])
 uploaded_pkkpr = col1.file_uploader("📂 Upload PKKPR (PDF koordinat atau Shapefile ZIP)", type=["pdf", "zip"])
 
@@ -550,9 +536,7 @@ if DEBUG and 'gdf_polygon' in globals() and gdf_polygon is not None:
     except Exception:
         pass
 
-# ======================
 # ANALISIS LUAS (OUTPUT FORMAT sesuai permintaan)
-# ======================
 if gdf_polygon is not None:
     try:
         st.markdown("### Analisis Luas Geometri\n")
@@ -604,9 +588,7 @@ if gdf_polygon is not None:
         if DEBUG:
             st.exception(e)
 
-# ======================
 # Upload Tapak Proyek (overlay)
-# ======================
 col1, col2 = st.columns([0.7, 0.3])
 uploaded_tapak = col1.file_uploader("📂 Upload Shapefile Tapak Proyek (ZIP)", type=["zip"], key="tapak")
 gdf_tapak = None
@@ -666,9 +648,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
             st.exception(e)
     st.markdown("---")
 
-# ======================
-# Interactive map
-# ======================
+# Peta Interaktif
 if gdf_polygon is not None:
     st.subheader("🌍 Preview Peta Interaktif")
     try:
@@ -696,9 +676,7 @@ if gdf_polygon is not None:
             st.exception(e)
     st.markdown("---")
 
-# ======================
 # Layout PNG
-# ======================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
@@ -713,10 +691,10 @@ if gdf_polygon is not None:
         if gdf_points is not None:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         try:
-            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+            ctx.add_basemap(ax, crs=3857, source=ctx.Google.Satellite)
         except Exception:
             if DEBUG:
-                st.write("Gagal memuat basemap Esri via contextily.")
+                st.write("Gagal memuat basemap Google Satellite via contextily.")
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
         legend = [
@@ -736,5 +714,6 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
