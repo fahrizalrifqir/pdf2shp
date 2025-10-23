@@ -677,72 +677,80 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # Layout PNG
-# ... (kode sebelumnya) ...
-
-# Layout PNG
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
-    try:
-        gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
-        xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-        width, height = xmax - xmin, ymax - ymin
+    st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
+    try:
+        gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+        xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+        width, height = xmax - xmin, ymax - ymin
         
-        # --- MODIFIKASI DIMULAI DI SINI ---
-        # Membuat figure dan axes.
-        # Menambahkan frameon=True untuk memastikan ada border di sekitar plot
-        fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150, frameon=True)
+        # Membuat figure dan axes
+        fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150, frameon=True)
 
-        gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
-        if gdf_tapak is not None:
-            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
-            gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
-        if gdf_points is not None:
-            gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
+        gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
+        if gdf_tapak is not None:
+            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
+            gdf_tapak_3857.plot(ax=ax, facecolor="red", alpha=0.4, edgecolor="red", label="Tapak Proyek")
+        if gdf_points is not None:
+            gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
+        
+        # Coba muat basemap Google Satellite
         try:
-            # Ganti provider ke Google Satellite (sesuai permintaan sebelumnya)
-            ctx.add_basemap(ax, crs=3857, source=xyz.Google.Satellite)
-        except Exception:
-            if DEBUG:
-                st.write("Gagal memuat basemap Google Satellite via contextily.")
-        
-        ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
-        ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
-        
+            ctx.add_basemap(ax, crs=3857, source=xyz.Google.Satellite)
+        except Exception as e:
+            # Jika gagal (karena firewall), set latar belakang jadi abu-abu agar terlihat
+            ax.set_facecolor('0.8') # Warna abu-abu
+            if DEBUG:
+                st.write(f"Gagal memuat basemap: {e}. Latar belakang diatur ke abu-abu.")
+                
+        ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
+        ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
+        
+        # Legenda
         legend = [
-            mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
-            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
-            mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-        ]
-        ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
-        
-        # --- MODIFIKASI DIMULAI DI SINI ---
+            mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
+            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
+            mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
+        ]
+        ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
+        
+        # Judul Peta
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+        
+        # Garis hitam di bawah judul
+        # Dapatkan posisi y dari judul untuk menempatkan garis tepat di bawahnya
+        title_y_pos = ax.title.get_position()[1]
+        fig_inv = fig.transFigure.inverted()
+        ax_inv = ax.transAxes.inverted()
         
-        # Tambahkan garis horizontal di bawah judul
-        # Anda bisa mengatur y, xmin, xmax, dan warna sesuai kebutuhan
-        ax.axhline(y=ax.get_ylim()[1] + (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.01, # Posisi y sedikit di atas plot
+        # Kalkulasi posisi y yang lebih baik dalam koordinat axes
+        # (ini mungkin perlu sedikit penyesuaian)
+        y_line_pos = 0.96 # Coba sesuaikan nilai ini (mis. 0.95, 0.97) jika kurang pas
+        
+        ax.axhline(y=y_line_pos, 
                    xmin=0.05, xmax=0.95, # Rentang horizontal garis
-                   color='black', linestyle='-', linewidth=1.5, clip_on=False, transform=ax.transAxes) # transform=ax.transAxes agar posisi relatif ke figure
-        
+                   color='black', linestyle='-', linewidth=1.5, 
+                   clip_on=False, transform=fig.transFigure) # Gunakan transform=fig.transFigure
+        
+        # Matikan axis
         ax.set_axis_off()
 
-        # Tambahkan outline hitam di sekeliling gambar
-        # Menggunakan fig.patch untuk frame di sekitar seluruh figure, bukan hanya axes
-        fig.patch.set_edgecolor('black')
-        fig.patch.set_linewidth(2) # Atur ketebalan garis sesuai keinginan
+        # Outline hitam di sekeliling gambar
+        # Menggunakan fig.patch untuk frame di sekitar seluruh figure
+        fig.patch.set_edgecolor('black')
+        fig.patch.set_linewidth(2) # Atur ketebalan garis
 
-        # --- MODIFIKASI BERAKHIR DI SINI ---
-        
-        png_buffer = io.BytesIO()
-        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        png_buffer.seek(0)
-        st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
+        png_buffer = io.BytesIO()
+        # bbox_inches="tight" penting untuk menyimpan outline
+        plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight") 
+        plt.close(fig)
+        png_buffer.seek(0)
+        st.download_button("⬇️ Download Layout Peta (PNG)", png_buffer, "layout_peta.png", mime="image/png")
+    
     except Exception as e:
-        st.error(f"Gagal membuat layout peta: {e}")
-        if DEBUG:
-            st.exception(e)
-
+        st.error(f"Gagal membuat layout peta: {e}")
+        if DEBUG:
+            st.exception(e)
 
 
 
