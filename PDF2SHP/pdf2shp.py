@@ -724,4 +724,21 @@ if gdf_polygon is not None:
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
         ]
-        ax.legend(handles=legend, 
+        ax.legend(handles=legend,ax.legend(handles=legend, loc="lower right", fontsize=8, framealpha=0.7)
+        ax.set_title("Peta Tapak Proyek & Batas PKKPR", fontsize=14, pad=12, color="white", backgroundcolor="black")
+        ax.axis("off")
+
+        # Simpan PNG ke buffer
+        buf_png = io.BytesIO()
+        plt.savefig(buf_png, format="png", bbox_inches="tight", dpi=200)
+        buf_png.seek(0)
+        plt.close(fig)
+
+        # Tampilkan di Streamlit
+        st.image(buf_png, caption="Layout Peta PKKPR & Tapak Proyek", use_container_width=True)
+        st.download_button("⬇️ Download Layout PNG", data=buf_png, file_name="Layout_Peta_PKKPR.png", mime="image/png")
+    except Exception as e:
+        st.error(f"Gagal membuat layout PNG: {e}")
+        if DEBUG:
+            st.exception(e)
+
