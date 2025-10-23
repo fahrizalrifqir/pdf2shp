@@ -312,8 +312,17 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             try:
                                 idx_bujur = next(i for i,v in enumerate(header) if "bujur" in v)
                                 idx_lintang = next(i for i,v in enumerate(header) if "lintang" in v)
-                                lon = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_bujur])).group(1).replace(",", "."))
-                                lat = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_lintang])).group(1).replace(",", "."))
+                                lon_val = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_bujur])).group(1).replace(",", "."))
+                                lat_val = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_lintang])).group(1).replace(",", "."))
+
+                                # FIX: Cek jika nilai tertukar (karena header PDF salah)
+                                if (95 <= lat_val <= 141) and (-11 <= lon_val <= 6):
+                                    # Nilai tertukar, tukar kembali
+                                    lon, lat = lat_val, lon_val
+                                else:
+                                    # Nilai (dan header) sudah benar
+                                    lon, lat = lon_val, lat_val
+
                             except Exception:
                                 lon, lat = nums[0], nums[1]
                         else:
@@ -720,5 +729,6 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
