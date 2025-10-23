@@ -312,16 +312,23 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             try:
                                 idx_bujur = next(i for i,v in enumerate(header) if "bujur" in v)
                                 idx_lintang = next(i for i,v in enumerate(header) if "lintang" in v)
+                                
+                                # ================================================
+                                # === MULAI BLOK PERBAIKAN ===
+                                # Ekstrak nilai berdasarkan header (yang mungkin salah)
                                 lon_val = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_bujur])).group(1).replace(",", "."))
-                                lat_val = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_lintang])).group(1).replace(",", "."))
+                                lat_val = float(re.search(r"(-?\d{1,13}[\,\.\d]*)", str(row[idx_lintang])).group(1).replace(",", "."))
 
-                                # FIX: Cek jika nilai tertukar (karena header PDF salah)
-                                if (95 <= lat_val <= 141) and (-11 <= lon_val <= 6):
-                                    # Nilai tertukar, tukar kembali
-                                    lon, lat = lat_val, lon_val
-                                else:
-                                    # Nilai (dan header) sudah benar
-                                    lon, lat = lon_val, lat_val
+                                # Cek jika nilai tertukar (karena header PDF salah)
+                                # (mis. lat_val = 107.x dan lon_val = -6.x)
+                                if (95 <= lat_val <= 141) and (-11 <= lon_val <= 6):
+                                    # Nilai tertukar, tukar kembali
+                                    lon, lat = lat_val, lon_val
+                                else:
+                                    # Nilai (dan header) sudah benar
+                                    lon, lat = lon_val, lat_val
+                                # === SELESAI BLOK PERBAIKAN ===
+                                # ================================================
 
                             except Exception:
                                 lon, lat = nums[0], nums[1]
@@ -338,9 +345,9 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     # fallback detection for luas (scan whole pages for any numeric+unit near 'luas')
     joined = "\n".join(pages_texts)
     m_dis = re.search(r"luas\s+tanah\s+yang\s+disetujui[^\d\n\r]{0,40}[:\-–]?\s*([\d\.,]+)\s*(m2|m²|m\s*2|ha|hektar)?",
-                      joined, flags=re.IGNORECASE)
+                        joined, flags=re.IGNORECASE)
     m_dim = re.search(r"luas\s+tanah\s+yang\s+dimohon[^\d\n\r]{0,40}[:\-–]?\s*([\d\.,]+)\s*(m2|m²|m\s*2|ha|hektar)?",
-                      joined, flags=re.IGNORECASE)
+                        joined, flags=re.IGNORECASE)
     if m_dis and luas_disetujui is None:
         num = m_dis.group(1)
         unit = m_dis.group(2) or ""
@@ -462,7 +469,7 @@ if uploaded_pkkpr:
                 if coords_final[0] != coords_final[-1]:
                     coords_final.append(coords_final[0])
                 gdf_points = gpd.GeoDataFrame(pd.DataFrame(coords_final, columns=["Lon","Lat"]),
-                                              geometry=[Point(x,y) for x,y in coords_final], crs="EPSG:4326")
+                                            geometry=[Point(x,y) for x,y in coords_final], crs="EPSG:4326")
                 poly = Polygon(coords_final)
                 gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
                 gdf_polygon = fix_geometry(gdf_polygon)
@@ -729,6 +736,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
-
-
-
