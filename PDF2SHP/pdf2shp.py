@@ -202,6 +202,8 @@ if uploaded_tapak and gdf_polygon is not None:
                 if f.lower().endswith(".shp"):
                     gdf_tapak = gpd.read_file(os.path.join(root, f))
                     break
+                    
+    st.subheader("📏 Analisis Luas Overlay")
     gdf_tapak = fix_geometry(gdf_tapak)
     utm_epsg, utm_zone = get_utm_info(*gdf_polygon.to_crs(4326).geometry.centroid.iloc[0].coords[0])
     gdf_tapak_utm = gdf_tapak.to_crs(utm_epsg)
@@ -241,3 +243,4 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout PNG: {e}")
         if DEBUG:
             st.exception(e)
+
