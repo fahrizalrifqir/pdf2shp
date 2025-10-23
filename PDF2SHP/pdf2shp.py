@@ -114,7 +114,7 @@ def save_shapefile_layers(gdf_poly, gdf_points):
         return buf.read()
 
 # =====================================================
-# FIX GEOMETRY — diperbaiki agar handle GeometryCollection
+# FIX GEOMETRY — perbaikan shapefile GeometryCollection
 # =====================================================
 def fix_geometry(gdf):
     if gdf is None or gdf.empty:
@@ -124,7 +124,6 @@ def fix_geometry(gdf):
     except Exception:
         pass
 
-    # Ubah GeometryCollection menjadi Polygon/MultiPolygon
     def extract_valid(geom):
         if geom is None:
             return None
@@ -170,15 +169,26 @@ def fix_geometry(gdf):
             continue
     return gdf
 
+# =====================================================
+# IMPROVED COORD PARSER (PDF OSS tolerant)
+# =====================================================
 def extract_coords_from_line_pair(line):
-    """Parse lines like '1 107.5794610744269 -7.043954965562468' or '107.57 -7.04'"""
-    m = re.match(r"^\s*\d+\s+([0-9\.\-]+)\s+([0-9\.\-]+)", line)
-    if not m:
-        m = re.match(r"^\s*([0-9\.\-]+)[\s,;]+([0-9\.\-]+)\s*$", line)
+    """
+    Parse koordinat dari baris PDF OSS — toleran terhadap spasi hilang antar angka.
+    Contoh format yang didukung:
+    '1 107.304212631806 -6.29747131047679'
+    '1 107.304212631806-6.29747131047679'
+    '107.304212631806 -6.29747131047679'
+    '107.304212631806-6.29747131047679'
+    """
+    s = line.strip()
+    s = re.sub(r"([0-9])(-\d)", r"\1 \2", s)  # tambahkan spasi sebelum minus kedua
+    m = re.search(r"(-?\d+\.\d+)\s+(-?\d+\.\d+)", s)
     if not m:
         return None
     try:
-        a = float(m.group(1)); b = float(m.group(2))
+        a = float(m.group(1))
+        b = float(m.group(2))
     except:
         return None
     if 95 <= a <= 141 and -11 <= b <= 6:
@@ -710,4 +720,5 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
