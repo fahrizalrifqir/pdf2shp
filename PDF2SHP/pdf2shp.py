@@ -11,8 +11,6 @@ from streamlit_folium import st_folium
 import pdfplumber
 import matplotlib.pyplot as plt
 import contextily as ctx
-import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
 from pyproj import Transformer
@@ -31,15 +29,6 @@ INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
 # ======================
 # HELPERS
 # ======================
-def normalize_text(s):
-    if not s:
-        return ""
-    s = str(s)
-    s = s.replace('\u2019', "'").replace('\u201d', '"').replace('\u201c', '"')
-    s = s.replace('’', "'").replace('“', '"').replace('”', '"')
-    s = s.replace('\xa0', ' ')
-    return s
-
 def format_angka_id(value):
     try:
         val = float(value)
@@ -67,18 +56,12 @@ def parse_luas_line(line):
     m = re.search(r"([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s]*(" + unit_pattern + r")", s, flags=re.IGNORECASE)
     if m:
         num = m.group(1)
-        unit = (m.group(2) or "").strip()
-        unit_up = unit.upper()
-        if "HA" in unit_up:
-            unit_disp = "Ha"
-        else:
-            unit_disp = "m²"
-        return f"{num} {unit_disp}".strip()
+        unit = (m.group(2) or "").strip().upper()
+        return f"{num} {'Ha' if 'HA' in unit else 'm²'}"
     return None
 
 def save_shapefile_layers(gdf_poly, gdf_points):
     with tempfile.TemporaryDirectory() as tmpdir:
-        files = []
         if gdf_poly is not None and not gdf_poly.empty:
             gdf_poly.to_crs(epsg=4326).to_file(os.path.join(tmpdir, "PKKPR_Polygon.shp"))
         if gdf_points is not None and not gdf_points.empty:
@@ -90,13 +73,10 @@ def save_shapefile_layers(gdf_poly, gdf_points):
         buf.seek(0)
         return buf.read()
 
-# =====================================================
-# FIX GEOMETRY — menangani GeometryCollection
-# =====================================================
 def fix_geometry(gdf):
     if gdf is None or gdf.empty:
         return gdf
-    gdf["geometry"] = gdf["geometry"].apply(lambda geom: make_valid(geom))
+    gdf["geometry"] = gdf["geometry"].apply(make_valid)
     def extract_valid(geom):
         if geom is None:
             return None
@@ -104,16 +84,11 @@ def fix_geometry(gdf):
             polys = [g for g in geom.geoms if g.geom_type in ["Polygon", "MultiPolygon"]]
             if not polys:
                 return None
-            if len(polys) == 1:
-                return polys[0]
-            return MultiPolygon(polys)
+            return polys[0] if len(polys) == 1 else MultiPolygon(polys)
         return geom
     gdf["geometry"] = gdf["geometry"].apply(extract_valid)
     return gdf
 
-# =====================================================
-# IMPROVED COORD PARSER (PDF OSS tolerant)
-# =====================================================
 def extract_coords_from_line_pair(line):
     s = line.strip()
     s = re.sub(r"([0-9])(-\d)", r"\1 \2", s)
@@ -130,16 +105,8 @@ def extract_coords_from_line_pair(line):
         return (b, a)
     return None
 
-def in_indonesia(lon, lat):
-    lon_min, lon_max, lat_min, lat_max = INDO_BOUNDS
-    return lon_min <= lon <= lon_max and lat_min <= lat <= lat_max
-
-# =====================================================
-# Ekstraksi PDF
-# =====================================================
 def extract_tables_and_coords_from_pdf(uploaded_file):
-    coords = []
-    luas = None
+    coords, luas = [], None
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
@@ -147,9 +114,8 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 parsed = extract_coords_from_line_pair(line)
                 if parsed:
                     coords.append(parsed)
-                if "luas" in line.lower():
-                    if luas is None:
-                        luas = parse_luas_line(line)
+                if "luas" in line.lower() and luas is None:
+                    luas = parse_luas_line(line)
             table = page.extract_table()
             if table:
                 for row in table:
@@ -163,41 +129,44 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     return {"coords": coords, "luas": luas}
 
 # =====================================================
-# UI: Upload PKKPR
+# UI: Upload PKKPR (PDF atau SHP)
 # =====================================================
 st.subheader("📄 Upload Dokumen PKKPR (PDF atau SHP ZIP)")
-uploaded = st.file_uploader("Unggah file PKKPR", type=["pdf", "zip"])
-epsg_override = st.sidebar.text_input("Override EPSG (kosong = otomatis)", "")
+col1, col2 = st.columns([3, 2])
+
+with col1:
+    uploaded = st.file_uploader("Unggah file PKKPR", type=["pdf", "zip"], label_visibility="collapsed")
 
 gdf_polygon = None
 gdf_points = None
 luas_pkkpr_doc = None
 
-if uploaded:
-    if uploaded.name.lower().endswith(".pdf"):
-        parsed = extract_tables_and_coords_from_pdf(uploaded)
-        coords = parsed["coords"]
-        luas_pkkpr_doc = parsed["luas"]
-        if coords:
-            if coords[0] != coords[-1]:
-                coords.append(coords[0])
-            gdf_points = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
-            gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
+with col2:
+    if uploaded:
+        if uploaded.name.lower().endswith(".pdf"):
+            parsed = extract_tables_and_coords_from_pdf(uploaded)
+            coords = parsed["coords"]
+            luas_pkkpr_doc = parsed["luas"]
+            if coords:
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                gdf_points = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
+                gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
+                gdf_polygon = fix_geometry(gdf_polygon)
+                st.success(f"Berhasil mengekstrak **{len(coords)} titik** dari PDF ✅")
+            else:
+                st.warning("Tidak ada koordinat ditemukan dalam PDF.")
+        elif uploaded.name.lower().endswith(".zip"):
+            with tempfile.TemporaryDirectory() as tmp:
+                zf = zipfile.ZipFile(io.BytesIO(uploaded.read()))
+                zf.extractall(tmp)
+                for root, _, files in os.walk(tmp):
+                    for f in files:
+                        if f.lower().endswith(".shp"):
+                            gdf_polygon = gpd.read_file(os.path.join(root, f))
+                            break
             gdf_polygon = fix_geometry(gdf_polygon)
-            st.success("Koordinat berhasil diekstraksi dari PDF.")
-        else:
-            st.warning("Tidak ada koordinat ditemukan dalam PDF.")
-    elif uploaded.name.lower().endswith(".zip"):
-        with tempfile.TemporaryDirectory() as tmp:
-            zf = zipfile.ZipFile(io.BytesIO(uploaded.read()))
-            zf.extractall(tmp)
-            for root, _, files in os.walk(tmp):
-                for f in files:
-                    if f.lower().endswith(".shp"):
-                        gdf_polygon = gpd.read_file(os.path.join(root, f))
-                        break
-        gdf_polygon = fix_geometry(gdf_polygon)
-        st.success("Shapefile PKKPR berhasil dimuat.")
+            st.success("Shapefile PKKPR berhasil dimuat ✅")
 
 # =====================================================
 # Analisis Luas
@@ -245,7 +214,7 @@ if uploaded_tapak and gdf_polygon is not None:
                f"Di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
 
 # =====================================================
-# Layout PNG — hanya tombol download, tanpa preview
+# Layout PNG — hanya tombol download
 # =====================================================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG)")
