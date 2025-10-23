@@ -89,53 +89,130 @@ def fix_geometry(gdf):
     gdf["geometry"] = gdf["geometry"].apply(extract_valid)
     return gdf
 
-def extract_coords_from_line_pair(line):
-    s = line.strip()
-    s = re.sub(r"([0-9])(-\d)", r"\1 \2", s)
-    m = re.search(r"(-?\d+\.\d+)\s+(-?\d+\.\d+)", s)
-    if not m:
-        return None
-    try:
-        a, b = float(m.group(1)), float(m.group(2))
-    except:
-        return None
-    if 95 <= a <= 141 and -11 <= b <= 6:
-        return (a, b)
-    if 95 <= b <= 141 and -11 <= a <= 6:
-        return (b, a)
-    return None
-
+# ======================
+# PDF PARSER LENGKAP (HIERARKI + FORMAT CAMPUR)
+# ======================
 def extract_tables_and_coords_from_pdf(uploaded_file):
-    coords, luas = [], None
+    from pyproj import Transformer
+
+    def dms_to_decimal(dms_str):
+        s = dms_str.replace(",", ".").replace("°", " ").replace("'", " ").replace("\"", " ")
+        s = re.sub(r"[NnSsEeWw]", "", s)
+        parts = [p for p in s.split() if p.strip()]
+        if len(parts) == 0:
+            return None
+        deg = float(parts[0])
+        minutes = float(parts[1]) if len(parts) > 1 else 0
+        seconds = float(parts[2]) if len(parts) > 2 else 0
+        val = deg + minutes / 60 + seconds / 3600
+        if any(x in dms_str.upper() for x in ["S", "W"]):
+            val *= -1
+        return val
+
+    def try_parse_float(s):
+        try:
+            return float(s.strip().replace(",", "."))
+        except:
+            return None
+
+    def in_indonesia(lon, lat):
+        return 95 <= lon <= 141 and -11 <= lat <= 6
+
+    def try_convert_utm(easting, northing):
+        for zone in range(46, 52):
+            for south in [True, False]:
+                epsg = 32700 + zone if south else 32600 + zone
+                try:
+                    transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+                    lon, lat = transformer.transform(easting, northing)
+                    if in_indonesia(lon, lat):
+                        return (lon, lat)
+                except:
+                    continue
+        return None
+
+    coords_disetujui, coords_dimohon, coords_plain = [], [], []
+    luas_disetujui, luas_dimohon, luas_plain = None, None, None
+
+    num_pattern = r"-?\d{1,3}(?:[.,]\d+)+"
+    dms_pattern = r"\d{1,3}[°\s]\d{1,2}['\s]\d{1,2}(?:[.,]\d+)?\s*[NSEW]"
+
+    current_mode = "plain"
+
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
-            # tangkap koordinat yang muncul di teks
             for line in text.splitlines():
-                parsed = extract_coords_from_line_pair(line)
-                if parsed:
-                    coords.append(parsed)
-                if "luas" in line.lower() and luas is None:
-                    luas = parse_luas_line(line)
+                l = line.lower()
+                if "koordinat" in l and "disetujui" in l:
+                    current_mode = "disetujui"
+                elif "koordinat" in l and "dimohon" in l:
+                    current_mode = "dimohon"
 
-            # ekstraksi tabel koordinat: pastikan kolom ke-2 dan ke-3 berisi angka desimal
+                if "luas" in l and "disetujui" in l and luas_disetujui is None:
+                    luas_disetujui = parse_luas_line(line)
+                elif "luas" in l and "dimohon" in l and luas_dimohon is None:
+                    luas_dimohon = parse_luas_line(line)
+                elif "luas" in l and luas_plain is None:
+                    luas_plain = parse_luas_line(line)
+
             table = page.extract_table()
             if table:
                 for row in table:
-                    if len(row) >= 3:
-                        try:
-                            col2 = str(row[1]).strip().replace(",", ".")
-                            col3 = str(row[2]).strip().replace(",", ".")
-                            if re.match(r"^-?\d{2,3}\.\d{3,}$", col2) and re.match(r"^-?\d{2,3}\.\d{3,}$", col3):
-                                a, b = float(col2), float(col3)
-                                if 95 <= a <= 141 and -11 <= b <= 6:
-                                    coords.append((a, b))
-                                elif 95 <= b <= 141 and -11 <= a <= 6:
-                                    coords.append((b, a))
-                        except Exception:
+                    if not row:
+                        continue
+                    nums = []
+                    for cell in row:
+                        if not cell:
                             continue
-    return {"coords": coords, "luas": luas}
+                        for n in re.findall(num_pattern, str(cell)):
+                            val = try_parse_float(n)
+                            if val is not None:
+                                nums.append(val)
+                        for d in re.findall(dms_pattern, str(cell)):
+                            dec = dms_to_decimal(d)
+                            if dec is not None:
+                                nums.append(dec)
 
+                    if len(nums) >= 2:
+                        a, b = nums[0], nums[1]
+                        pair = None
+                        if in_indonesia(a, b):
+                            pair = (a, b)
+                        elif in_indonesia(b, a):
+                            pair = (b, a)
+                        elif (100000 <= abs(a) <= 9999999) and (100000 <= abs(b) <= 9999999):
+                            utm = try_convert_utm(a, b)
+                            if utm:
+                                pair = utm
+
+                        if pair:
+                            if current_mode == "disetujui":
+                                coords_disetujui.append(pair)
+                            elif current_mode == "dimohon":
+                                coords_dimohon.append(pair)
+                            else:
+                                coords_plain.append(pair)
+
+    if coords_disetujui:
+        coords = coords_disetujui
+        luas = luas_disetujui
+    elif coords_dimohon:
+        coords = coords_dimohon
+        luas = luas_dimohon
+    else:
+        coords = coords_plain
+        luas = luas_plain
+
+    seen = set()
+    unique_coords = []
+    for xy in coords:
+        key = (round(xy[0], 6), round(xy[1], 6))
+        if key not in seen:
+            unique_coords.append(xy)
+            seen.add(key)
+
+    return {"coords": unique_coords, "luas": luas}
 
 # =====================================================
 # UI: Upload PKKPR (PDF atau SHP)
@@ -252,7 +329,7 @@ if gdf_polygon is not None:
         st_folium(m, width=900, height=600)
     except Exception as e:
         st.error(f"Gagal menampilkan peta: {e}")
-        
+
 # =====================================================
 # Layout PNG — hanya tombol download
 # =====================================================
@@ -280,14 +357,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
-
-
-
-
-
-
-
-
-
-
-
