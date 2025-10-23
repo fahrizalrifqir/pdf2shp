@@ -244,86 +244,29 @@ if gdf_polygon is not None:
     except Exception as e:
         st.error(f"Gagal menampilkan peta: {e}")
         
-# ======================
-# LAYOUT PNG (dengan garis & frame hitam)
-# ======================
+# =====================================================
+# LAYOUT PNG (download only)
+# =====================================================
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG)")
     try:
-        # Konversi ke Web Mercator
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
-        width, height = xmax - xmin, ymax - ymin
-
-        # Setup figure
         fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
-        fig.patch.set_facecolor("white")
-
-        # Plot polygon PKKPR
-        gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow",
-                           linewidth=2.5, label="PKKPR (Polygon)")
-
-        # Plot tapak proyek jika ada
+        gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
         if 'gdf_tapak' in locals():
-            gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
-            gdf_tapak_3857.plot(ax=ax, facecolor="red", edgecolor="red",
-                                alpha=0.4, label="Tapak Proyek")
-
-        # Plot titik koordinat jika ada
+            gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
         if gdf_points is not None:
-            gdf_points_3857 = gdf_points.to_crs(epsg=3857)
-            gdf_points_3857.plot(ax=ax, color="orange", edgecolor="black",
-                                 markersize=30, label="PKKPR (Titik)")
-
-        # Tambahkan basemap
-        try:
-            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
-        except Exception:
-            pass
-
-        # Atur tampilan peta
-        ax.set_xlim(xmin - width * 0.05, xmax + width * 0.05)
-        ax.set_ylim(ymin - height * 0.05, ymax + height * 0.05)
+            gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
+        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         ax.axis("off")
-
-        # Tambahkan judul
-        title_text = "Peta Kesesuaian Tapak Proyek dengan PKKPR"
-        plt.suptitle(title_text, fontsize=14, fontweight="bold", y=0.98)
-
-        # Garis di bawah judul
-        fig.canvas.draw()
-        line_y = 0.965  # posisi garis horizontal
-        fig.lines.append(plt.Line2D([0.05, 0.95], [line_y, line_y],
-                                    transform=fig.transFigure, color='black', linewidth=1.5))
-
-        # Outline frame hitam di sekeliling peta
-        rect = plt.Rectangle((0, 0), 1, 1, transform=fig.transFigure,
-                             fill=False, color='black', linewidth=1.5)
-        fig.patches.append(rect)
-
-        # Legenda
-        legend_elements = [
-            mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black",
-                          linestyle="None", markersize=6, label="PKKPR (Titik)"),
-            mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2,
-                           label="PKKPR (Polygon)"),
-            mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
-        ]
-        ax.legend(handles=legend_elements, loc="upper right", title="Legenda", fontsize=8)
-
-        # Simpan ke buffer dan buat tombol download
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
-
-        st.download_button("⬇️ Download Layout PNG", data=buf,
-                           file_name="Layout_PKKPR.png", mime="image/png")
-
+        st.download_button("⬇️ Download Layout PNG", data=buf, file_name="Layout_PKKPR.png", mime="image/png")
     except Exception as e:
         st.error(f"Gagal membuat layout PNG: {e}")
-        if DEBUG:
-            st.exception(e)
+
 
 
 
