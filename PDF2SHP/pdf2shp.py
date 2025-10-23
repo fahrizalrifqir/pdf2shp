@@ -260,7 +260,7 @@ if gdf_polygon is not None:
         ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
         ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
-        ax.set_title("Peta Tapak Proyek & Batas PKKPR", fontsize=14)
+        ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
         ax.axis("off")
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
@@ -271,6 +271,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
