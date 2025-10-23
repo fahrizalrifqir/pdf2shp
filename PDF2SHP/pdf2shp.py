@@ -691,10 +691,10 @@ if gdf_polygon is not None:
         if gdf_points is not None:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         try:
-            ctx.add_basemap(ax, crs=3857, source=ctx.Google.Satellite)
+            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
         except Exception:
             if DEBUG:
-                st.write("Gagal memuat basemap Google Satellite via contextily.")
+                st.write("Gagal memuat basemap Esri via contextily.")
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
         legend = [
@@ -714,6 +714,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
