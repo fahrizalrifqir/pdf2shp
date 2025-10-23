@@ -172,7 +172,7 @@ with col2:
 # Analisis Luas
 # =====================================================
 if gdf_polygon is not None:
-    st.subheader("📏 Analisis Luas Geometri")
+    st.subheader("Analisis Luas Geometri")
     if luas_pkkpr_doc:
         st.write(f"Luas Dokumen PKKPR: **{luas_pkkpr_doc}**")
 
@@ -203,7 +203,7 @@ if uploaded_tapak and gdf_polygon is not None:
                     gdf_tapak = gpd.read_file(os.path.join(root, f))
                     break
                     
-    st.subheader("Analisis Luas Overlay (UTM {utm_zone})")
+    st.subheader("Analisis Luas Overlay UTM")
     gdf_tapak = fix_geometry(gdf_tapak)
     utm_epsg, utm_zone = get_utm_info(*gdf_polygon.to_crs(4326).geometry.centroid.iloc[0].coords[0])
     gdf_tapak_utm = gdf_tapak.to_crs(utm_epsg)
@@ -243,5 +243,6 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout PNG: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
