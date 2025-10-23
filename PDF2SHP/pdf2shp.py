@@ -172,7 +172,6 @@ with col2:
 # Analisis Luas
 # =====================================================
 if gdf_polygon is not None:
-    st.subheader("Analisis Luas Geometri")
     if luas_pkkpr_doc:
         st.write(f"Luas Dokumen PKKPR: **{luas_pkkpr_doc}**")
 
@@ -243,6 +242,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout PNG: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
