@@ -215,6 +215,36 @@ if uploaded_tapak and gdf_polygon is not None:
                f"Luas Tapak di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
 
 # =====================================================
+# PREVIEW PETA
+# =====================================================
+if gdf_polygon is not None:
+    st.subheader("🌍 Preview Peta Interaktif")
+    try:
+        centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+        m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
+        Fullscreen(position="bottomleft").add_to(m)
+        folium.TileLayer("openstreetmap", name="OpenStreetMap").add_to(m)
+        folium.TileLayer("CartoDB Positron", name="CartoDB Positron").add_to(m)
+        folium.TileLayer(xyz.Esri.WorldImagery, name="Esri World Imagery").add_to(m)
+        folium.GeoJson(gdf_polygon.to_crs(epsg=4326),
+                       name="PKKPR",
+                       style_function=lambda x: {"color":"yellow","weight":3,"fillOpacity":0.1}).add_to(m)
+        if gdf_points is not None:
+            for i, row in gdf_points.iterrows():
+                folium.CircleMarker([row.geometry.y, row.geometry.x],
+                                    radius=4, color="black", fill=True,
+                                    fill_color="orange",
+                                    popup=f"Titik {i+1}").add_to(m)
+        if 'gdf_tapak' in locals():
+            folium.GeoJson(gdf_tapak.to_crs(epsg=4326),
+                           name="Tapak Proyek",
+                           style_function=lambda x: {"color":"red","fillColor":"red","fillOpacity":0.4}).add_to(m)
+        folium.LayerControl(collapsed=True).add_to(m)
+        st_folium(m, width=900, height=600)
+    except Exception as e:
+        st.error(f"Gagal menampilkan peta: {e}")
+        
+# =====================================================
 # Layout PNG — hanya tombol download
 # =====================================================
 if gdf_polygon is not None:
@@ -242,6 +272,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout PNG: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
