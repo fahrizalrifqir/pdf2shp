@@ -248,7 +248,6 @@ if gdf_polygon is not None:
 # Layout PNG — hanya tombol download
 # =====================================================
 if gdf_polygon is not None:
-    st.subheader("🖼️ Layout Peta (PNG)")
     try:
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
@@ -267,11 +266,12 @@ if gdf_polygon is not None:
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
-        st.download_button("⬇️ Download Layout PNG", data=buf, file_name="Layout_PKKPR.png", mime="image/png")
+        st.download_button("⬇️ Download Peta PNG", data=buf, file_name="Peta_Overlay.png", mime="image/png")
     except Exception as e:
-        st.error(f"Gagal membuat layout PNG: {e}")
+        st.error(f"Gagal membuat Peta PNG: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
