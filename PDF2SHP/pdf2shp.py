@@ -110,23 +110,32 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
+            # tangkap koordinat yang muncul di teks
             for line in text.splitlines():
                 parsed = extract_coords_from_line_pair(line)
                 if parsed:
                     coords.append(parsed)
                 if "luas" in line.lower() and luas is None:
                     luas = parse_luas_line(line)
+
+            # ekstraksi tabel koordinat: pastikan kolom ke-2 dan ke-3 berisi angka desimal
             table = page.extract_table()
             if table:
                 for row in table:
-                    vals = [re.findall(r"(-?\d+\.\d+)", str(c)) for c in row]
-                    flat = [float(v) for sub in vals for v in sub]
-                    if len(flat) >= 2:
-                        if 95 <= flat[0] <= 141 and -11 <= flat[1] <= 6:
-                            coords.append((flat[0], flat[1]))
-                        elif 95 <= flat[1] <= 141 and -11 <= flat[0] <= 6:
-                            coords.append((flat[1], flat[0]))
+                    if len(row) >= 3:
+                        try:
+                            col2 = str(row[1]).strip().replace(",", ".")
+                            col3 = str(row[2]).strip().replace(",", ".")
+                            if re.match(r"^-?\d{2,3}\.\d{3,}$", col2) and re.match(r"^-?\d{2,3}\.\d{3,}$", col3):
+                                a, b = float(col2), float(col3)
+                                if 95 <= a <= 141 and -11 <= b <= 6:
+                                    coords.append((a, b))
+                                elif 95 <= b <= 141 and -11 <= a <= 6:
+                                    coords.append((b, a))
+                        except Exception:
+                            continue
     return {"coords": coords, "luas": luas}
+
 
 # =====================================================
 # UI: Upload PKKPR (PDF atau SHP)
@@ -271,6 +280,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
