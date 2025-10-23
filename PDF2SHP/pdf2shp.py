@@ -116,7 +116,7 @@ def fix_geometry(gdf):
 # =====================================================
 def extract_coords_from_line_pair(line):
     s = line.strip()
-    s = re.sub(r"([0-9])(-\d)", r"\1 \2", s)  # tambah spasi jika hilang
+    s = re.sub(r"([0-9])(-\d)", r"\1 \2", s)
     m = re.search(r"(-?\d+\.\d+)\s+(-?\d+\.\d+)", s)
     if not m:
         return None
@@ -150,7 +150,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 if "luas" in line.lower():
                     if luas is None:
                         luas = parse_luas_line(line)
-            # tabel PDF
             table = page.extract_table()
             if table:
                 for row in table:
@@ -173,7 +172,6 @@ epsg_override = st.sidebar.text_input("Override EPSG (kosong = otomatis)", "")
 gdf_polygon = None
 gdf_points = None
 luas_pkkpr_doc = None
-detected_info = {}
 
 if uploaded:
     if uploaded.name.lower().endswith(".pdf"):
@@ -186,7 +184,6 @@ if uploaded:
             gdf_points = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
             gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
             gdf_polygon = fix_geometry(gdf_polygon)
-            detected_info = {"mode": "PDF", "n_points": len(coords)}
             st.success("Koordinat berhasil diekstraksi dari PDF.")
         else:
             st.warning("Tidak ada koordinat ditemukan dalam PDF.")
@@ -248,28 +245,7 @@ if uploaded_tapak and gdf_polygon is not None:
                f"Di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
 
 # =====================================================
-# Peta Interaktif
-# =====================================================
-if gdf_polygon is not None:
-    st.subheader("🌍 Peta Interaktif")
-    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
-    m = folium.Map(location=[centroid.y, centroid.x], zoom_start=17, tiles=None)
-    Fullscreen().add_to(m)
-    folium.TileLayer("openstreetmap").add_to(m)
-    folium.TileLayer("CartoDB Positron").add_to(m)
-    folium.TileLayer(xyz.Esri.WorldImagery).add_to(m)
-    folium.GeoJson(gdf_polygon.to_crs(4326), name="PKKPR",
-                   style_function=lambda x: {"color": "yellow", "weight": 3, "fillOpacity": 0.2}).add_to(m)
-    if gdf_points is not None:
-        for i, r in gdf_points.iterrows():
-            folium.CircleMarker([r.geometry.y, r.geometry.x], radius=4, color="orange", fill=True).add_to(m)
-    if 'gdf_tapak' in locals():
-        folium.GeoJson(gdf_tapak.to_crs(4326), name="Tapak", style_function=lambda x: {"color": "red", "fillOpacity": 0.4}).add_to(m)
-    folium.LayerControl().add_to(m)
-    st_folium(m, width=900, height=600)
-
-# =====================================================
-# Layout PNG
+# Layout PNG — hanya tombol download, tanpa preview
 # =====================================================
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG)")
@@ -291,7 +267,6 @@ if gdf_polygon is not None:
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
-        st.image(buf, caption="Layout Peta PKKPR & Tapak", use_container_width=True)
         st.download_button("⬇️ Download Layout PNG", data=buf, file_name="Layout_PKKPR.png", mime="image/png")
     except Exception as e:
         st.error(f"Gagal membuat layout PNG: {e}")
