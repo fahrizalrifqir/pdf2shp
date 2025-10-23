@@ -245,7 +245,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal menampilkan peta: {e}")
         
 # =====================================================
-# LAYOUT PNG (download only)
+# Layout PNG — hanya tombol download
 # =====================================================
 if gdf_polygon is not None:
     try:
@@ -258,14 +258,20 @@ if gdf_polygon is not None:
         if gdf_points is not None:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
         ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+        ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
+        ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
+        ax.set_title("Peta Tapak Proyek & Batas PKKPR", fontsize=14)
         ax.axis("off")
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
-        st.download_button("⬇️ Download Layout PNG", data=buf, file_name="Layout_PKKPR.png", mime="image/png")
+        st.download_button("⬇️ Download Peta PNG", data=buf, file_name="Peta_Overlay.png", mime="image/png")
     except Exception as e:
-        st.error(f"Gagal membuat layout PNG: {e}")
+        st.error(f"Gagal membuat peta: {e}")
+        if DEBUG:
+            st.exception(e)
+
 
 
 
