@@ -677,13 +677,21 @@ if gdf_polygon is not None:
     st.markdown("---")
 
 # Layout PNG
+# ... (kode sebelumnya) ...
+
+# Layout PNG
 if gdf_polygon is not None:
     st.subheader("🖼️ Layout Peta (PNG) untuk Dokumentasi")
     try:
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
         width, height = xmax - xmin, ymax - ymin
-        fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150)
+        
+        # --- MODIFIKASI DIMULAI DI SINI ---
+        # Membuat figure dan axes.
+        # Menambahkan frameon=True untuk memastikan ada border di sekitar plot
+        fig, ax = plt.subplots(figsize=(14, 10) if width > height else (10, 14), dpi=150, frameon=True)
+
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5, label="Batas PKKPR")
         if gdf_tapak is not None:
             gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
@@ -691,20 +699,40 @@ if gdf_polygon is not None:
         if gdf_points is not None:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", edgecolor="black", markersize=30, label="Titik PKKPR")
         try:
-            ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+            # Ganti provider ke Google Satellite (sesuai permintaan sebelumnya)
+            ctx.add_basemap(ax, crs=3857, source=xyz.Google.Satellite)
         except Exception:
             if DEBUG:
-                st.write("Gagal memuat basemap Esri via contextily.")
+                st.write("Gagal memuat basemap Google Satellite via contextily.")
+        
         ax.set_xlim(xmin - width*0.05, xmax + width*0.05)
         ax.set_ylim(ymin - height*0.05, ymax + height*0.05)
+        
         legend = [
             mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None", markersize=5, label="PKKPR (Titik)"),
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=1.5, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
         ]
         ax.legend(handles=legend, title="Legenda", loc="upper right", fontsize=8, title_fontsize=9)
+        
+        # --- MODIFIKASI DIMULAI DI SINI ---
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14, weight="bold")
+        
+        # Tambahkan garis horizontal di bawah judul
+        # Anda bisa mengatur y, xmin, xmax, dan warna sesuai kebutuhan
+        ax.axhline(y=ax.get_ylim()[1] + (ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.01, # Posisi y sedikit di atas plot
+                   xmin=0.05, xmax=0.95, # Rentang horizontal garis
+                   color='black', linestyle='-', linewidth=1.5, clip_on=False, transform=ax.transAxes) # transform=ax.transAxes agar posisi relatif ke figure
+        
         ax.set_axis_off()
+
+        # Tambahkan outline hitam di sekeliling gambar
+        # Menggunakan fig.patch untuk frame di sekitar seluruh figure, bukan hanya axes
+        fig.patch.set_edgecolor('black')
+        fig.patch.set_linewidth(2) # Atur ketebalan garis sesuai keinginan
+
+        # --- MODIFIKASI BERAKHIR DI SINI ---
+        
         png_buffer = io.BytesIO()
         plt.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
         plt.close(fig)
@@ -714,6 +742,7 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
 
