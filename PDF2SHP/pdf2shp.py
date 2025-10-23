@@ -3,7 +3,7 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, shutil, re, tempfile, math
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
@@ -59,18 +59,13 @@ def get_utm_info(lon, lat):
     zone_label = f"{zone}{'N' if lat >= 0 else 'S'}"
     return epsg, zone_label
 
-# Improved luas parsing (robust terhadap unicode)
 def parse_luas_line(line):
-    """Return raw-like luas string as in document (number + unit preserved when possible)."""
     if not line:
         return None
     s = str(line)
-    # normalize weird spaces and unicode superscript 2
     s = s.replace('\xa0', ' ').replace('\u00B2', '²').replace('m2', 'm²')
     unit_pattern = r"(m2|m²|m\s*2|ha|hektar)"
-    # 1) try explicit labelled pattern
-    m = re.search(r"(luas[^\n\r]{0,60}?(:|–|-)?\s*)([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s\-–]*(" + unit_pattern + r")?",
-                  s, flags=re.IGNORECASE)
+    m = re.search(r"(luas[^\n\r]{0,60}?(:|–|-)?\s*)([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s\-–]*(" + unit_pattern + r")?", s, flags=re.IGNORECASE)
     if m:
         num = m.group(3)
         unit = (m.group(4) or "").strip()
@@ -84,7 +79,6 @@ def parse_luas_line(line):
         else:
             unit_disp = ""
         return f"{num} {unit_disp}".strip()
-    # 2) fallback: number + unit anywhere
     m2 = re.search(r"([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)[\s]*(" + unit_pattern + r")", s, flags=re.IGNORECASE)
     if m2:
         num = m2.group(1)
@@ -95,7 +89,6 @@ def parse_luas_line(line):
         else:
             unit_disp = "m²" if ("M2" in unit_up or "M²" in unit_up or unit_up == "M") else unit
         return f"{num} {unit_disp}".strip()
-    # 3) last resort: any standalone number
     m3 = re.search(r"([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)", s)
     if m3:
         num = m3.group(1)
@@ -103,7 +96,6 @@ def parse_luas_line(line):
     return None
 
 def save_shapefile_layers(gdf_poly, gdf_points):
-    """Save polygon and points as two shapefile layers in one ZIP (returns bytes)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         files = []
         if gdf_poly is not None and not gdf_poly.empty:
@@ -121,27 +113,41 @@ def save_shapefile_layers(gdf_poly, gdf_points):
         buf.seek(0)
         return buf.read()
 
+# =====================================================
+# FIX GEOMETRY — diperbaiki agar handle GeometryCollection
+# =====================================================
 def fix_geometry(gdf):
-    """Make geometries valid and try scaling heuristic if coordinates look metric-in-lon-lat.
-       IMPORTANT: scaling is done around centroid to avoid translation.
-    """
     if gdf is None or gdf.empty:
         return gdf
     try:
         gdf["geometry"] = gdf["geometry"].apply(lambda geom: make_valid(geom))
     except Exception:
         pass
+
+    # Ubah GeometryCollection menjadi Polygon/MultiPolygon
+    def extract_valid(geom):
+        if geom is None:
+            return None
+        if geom.geom_type == "GeometryCollection":
+            polys = [g for g in geom.geoms if g.geom_type in ["Polygon", "MultiPolygon"]]
+            if not polys:
+                return None
+            if len(polys) == 1:
+                return polys[0]
+            return MultiPolygon(polys)
+        return geom
+
+    gdf["geometry"] = gdf["geometry"].apply(extract_valid)
+
     try:
         b = gdf.total_bounds
     except Exception:
         return gdf
-    # if already in lon/lat ranges -> set crs 4326
     if (-180 <= b[0] <= 180) and (-90 <= b[1] <= 90):
         try:
             return gdf.set_crs(epsg=4326, allow_override=True)
         except Exception:
             return gdf
-    # try scale down heuristics (scale around centroid to avoid translation)
     try:
         centroid = gdf.geometry.unary_union.centroid
     except Exception:
@@ -149,24 +155,15 @@ def fix_geometry(gdf):
     for fac in [10, 100, 1000, 10000, 100000]:
         try:
             g2 = gdf.copy()
-            if centroid is not None:
-                origin = (centroid.x, centroid.y)
-            else:
-                origin = (0, 0)
+            origin = (centroid.x, centroid.y) if centroid else (0, 0)
             g2["geometry"] = g2["geometry"].apply(lambda geom: affinity.scale(geom, xfact=1/fac, yfact=1/fac, origin=origin))
             b2 = g2.total_bounds
             if DEBUG:
-                try:
-                    st.sidebar.write(f"DEBUG: try scale 1/{fac} -> bounds {b2}")
-                except Exception:
-                    pass
+                st.sidebar.write(f"DEBUG: try scale 1/{fac} -> bounds {b2}")
             if (95 <= b2[0] <= 145) and (-11 <= b2[1] <= 6):
-                try:
-                    if DEBUG:
-                        st.sidebar.write(f"DEBUG: Rescale berhasil dengan factor {fac}. New bounds: {b2}")
-                    return g2.set_crs(epsg=4326, allow_override=True)
-                except Exception:
-                    return g2
+                if DEBUG:
+                    st.sidebar.write(f"DEBUG: Rescale berhasil dengan factor {fac}. New bounds: {b2}")
+                return g2.set_crs(epsg=4326, allow_override=True)
         except Exception as e:
             if DEBUG:
                 st.sidebar.write(f"DEBUG: rescale gagal untuk fac {fac}: {e}")
@@ -713,3 +710,4 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat layout peta: {e}")
         if DEBUG:
             st.exception(e)
+
