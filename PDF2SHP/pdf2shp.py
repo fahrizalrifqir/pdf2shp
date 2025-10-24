@@ -338,14 +338,12 @@ with col2:
                                 buffer_candidates = [1.0, 5.0, 10.0, 50.0, 100.0]  # meter
                                 buf_poly = None
                                 for b in buffer_candidates:
+                                    # tanpa try-outer — tangani exception untuk conversion saja
                                     try:
                                         buf = ls_utm.buffer(b)
                                         if buf is not None and buf.geom_type.lower() in ("polygon", "multipolygon") and buf.area > 0:
-                                            # convert exterior coords of largest polygon back to WGS84
                                             poly_utm = buf
-                                            # choose exterior of largest polygon if multipolygon
                                             if poly_utm.geom_type.lower() == "multipolygon":
-                                                # pick largest part
                                                 parts = list(poly_utm.geoms)
                                                 parts.sort(key=lambda p: p.area, reverse=True)
                                                 poly_utm = parts[0]
@@ -361,6 +359,10 @@ with col2:
                                             except Exception as e:
                                                 if DEBUG:
                                                     st.write("DEBUG: gagal convert buffer->WGS:", e)
+                                    except Exception as e:
+                                        if DEBUG:
+                                            st.write("DEBUG: buffer LineString error untuk b=", b, e)
+
                                 if buf_poly is not None:
                                     poly = buf_poly
                                     valid_polygon = True
@@ -382,14 +384,18 @@ with col2:
                                                         parts.sort(key=lambda p: p.area, reverse=True)
                                                         poly_utm = parts[0]
                                                     exterior_coords = list(poly_utm.exterior.coords)
-                                                    wgs_coords = [to_wgs.transform(x, y) for (x, y) in exterior_coords]
-                                                    candidate = Polygon(wgs_coords)
-                                                    if candidate.is_valid and candidate.area > 0:
-                                                        poly = candidate
-                                                        valid_polygon = True
+                                                    try:
+                                                        wgs_coords = [to_wgs.transform(x, y) for (x, y) in exterior_coords]
+                                                        candidate = Polygon(wgs_coords)
+                                                        if candidate.is_valid and candidate.area > 0:
+                                                            poly = candidate
+                                                            valid_polygon = True
+                                                            if DEBUG:
+                                                                st.write(f"DEBUG: MultiPoint.buffer berhasil b={b} m, area_wgs={candidate.area}")
+                                                            break
+                                                    except Exception as e:
                                                         if DEBUG:
-                                                            st.write(f"DEBUG: MultiPoint.buffer berhasil b={b} m, area_wgs={candidate.area}")
-                                                        break
+                                                            st.write("DEBUG: MultiPoint.buffer convert->WGS error:", e)
                                             except Exception as e:
                                                 if DEBUG:
                                                     st.write("DEBUG: MultiPoint.buffer error untuk b=", b, e)
