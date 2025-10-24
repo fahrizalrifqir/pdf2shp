@@ -28,11 +28,6 @@ INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
 # HELPERS
 # ======================
 def format_angka_id(value):
-    """
-    Format numeric value ke gaya Indonesia: ribuan pake titik, desimal pake koma.
-    Input: float/int/str (jika str yang berisi angka akan dicoba konversi).
-    Output: string, tanpa satuan.
-    """
     try:
         val = float(value)
         if abs(val - round(val)) < 0.001:
@@ -51,9 +46,6 @@ def get_utm_info(lon, lat):
     return epsg, zone_label
 
 def parse_luas_line(line):
-    """
-    Ekstrak nilai luas dari teks (window). Kembalikan string seperti '2.007 Ha' atau '1.234 m²'.
-    """
     if not line:
         return None
     s = str(line)
@@ -275,81 +267,154 @@ with col2:
             coords = parsed["coords"]
             luas_pkkpr_doc = parsed["luas"]
             if coords:
-                # --------------------------
-                # BLOK DITINGKATKAN: buat geometry robust dari coords
-                # (mengganti pembuatan Polygon langsung agar tidak menghasilkan garis)
-                # --------------------------
                 try:
                     # pastikan ring tertutup (jika memang dimaksudkan sebagai polygon)
                     if coords[0] != coords[-1]:
                         coords.append(coords[0])
 
-                    # buat GeoDataFrame titik dulu (tetap mempertahankan titik asli)
+                    # buat GeoDataFrame titik dulu
                     pts = [Point(x, y) for x, y in coords]
                     gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
 
-                    # coba buat polygon langsung dari coords
+                    # Debug: ringkasan variasi koordinat
+                    xs = [p.x for p in pts]
+                    ys = [p.y for p in pts]
+                    xrange = max(xs) - min(xs) if pts else 0
+                    yrange = max(ys) - min(ys) if pts else 0
+                    if DEBUG:
+                        st.write("DEBUG: jumlah titik:", len(pts))
+                        st.write("DEBUG: contoh 10 koordinat pertama:", coords[:10])
+                        st.write(f"DEBUG: xrange={xrange}, yrange={yrange}")
+
                     poly = None
+                    valid_polygon = False
+
+                    # 1) coba Polygon langsung
                     try:
                         poly = Polygon(coords)
-                    except Exception:
+                        if poly.is_valid and poly.area and poly.geom_type.lower() == "polygon":
+                            valid_polygon = True
+                            if DEBUG:
+                                st.write("DEBUG: Polygon langsung valid. area:", poly.area)
+                    except Exception as e:
+                        if DEBUG:
+                            st.write("DEBUG: Polygon langsung gagal:", e)
                         poly = None
 
-                    valid_polygon = False
-                    if poly is not None:
-                        try:
-                            if poly.is_valid and poly.area and poly.geom_type.lower() == "polygon":
-                                valid_polygon = True
-                        except:
-                            valid_polygon = False
-
-                    # jika polygon tidak valid atau area = 0, coba alternatif
+                    # 2) coba convex_hull
                     if not valid_polygon:
-                        mp = MultiPoint(pts)
-                        alt = mp.convex_hull  # coba convex hull
-                        if alt is not None and alt.geom_type.lower() == "polygon" and alt.area > 0:
-                            poly = alt
-                            valid_polygon = True
-                        else:
-                            # Jika convex_hull masih LineString (titik kolinear), lakukan buffer di UTM
-                            avg_lon = sum([p.x for p in pts]) / len(pts)
-                            avg_lat = sum([p.y for p in pts]) / len(pts)
-                            utm_epsg, utm_zone = get_utm_info(avg_lon, avg_lat)
-
-                            try:
-                                to_utm = Transformer.from_crs("epsg:4326", f"epsg:{utm_epsg}", always_xy=True)
-                                to_wgs = Transformer.from_crs(f"epsg:{utm_epsg}", "epsg:4326", always_xy=True)
-
-                                # konversi ke UTM lalu buat LineString dan buffer 1 meter
-                                ls_utm_coords = [to_utm.transform(p.x, p.y) for p in pts]
-                                ls_utm = LineString(ls_utm_coords)
-                                buf_utm = ls_utm.buffer(1.0)  # buffer 1 meter (ubah jika perlu)
-
-                                # convert polygon buffer kembali ke WGS84
-                                buf_wgs_coords = [to_wgs.transform(x, y) for (x, y) in buf_utm.exterior.coords]
-                                poly = Polygon(buf_wgs_coords)
-                                if poly is not None and poly.is_valid and poly.area > 0:
-                                    valid_polygon = True
-                            except Exception as e:
+                        try:
+                            mp = MultiPoint(pts)
+                            alt = mp.convex_hull
+                            if alt is not None and alt.geom_type.lower() == "polygon" and alt.area > 0:
+                                poly = alt
+                                valid_polygon = True
                                 if DEBUG:
-                                    st.write("DEBUG: Gagal membuat buffer UTM:", e)
+                                    st.write("DEBUG: convex_hull berhasil. area:", poly.area)
+                        except Exception as e:
+                            if DEBUG:
+                                st.write("DEBUG: convex_hull error:", e)
 
-                    # jika berhasil bentuk polygon valid, simpan
+                    # 3) kalau masih gagal -> transform ke UTM dan coba buffer LineString dengan beberapa jarak
+                    if not valid_polygon:
+                        avg_lon = sum(xs) / len(xs)
+                        avg_lat = sum(ys) / len(ys)
+                        utm_epsg, utm_zone = get_utm_info(avg_lon, avg_lat)
+                        if DEBUG:
+                            st.write("DEBUG: mencoba UTM EPSG:", utm_epsg, "zona:", utm_zone)
+
+                        try:
+                            to_utm = Transformer.from_crs("epsg:4326", f"epsg:{utm_epsg}", always_xy=True)
+                            to_wgs = Transformer.from_crs(f"epsg:{utm_epsg}", "epsg:4326", always_xy=True)
+
+                            utm_pts = [to_utm.transform(p.x, p.y) for p in pts]
+                            # jika hanya 1 titik unik -> tidak bisa
+                            uniq_utm = list({(round(x,6), round(y,6)) for x,y in utm_pts})
+                            if len(uniq_utm) < 2:
+                                if DEBUG:
+                                    st.write("DEBUG: terlalu sedikit titik unik di UTM:", uniq_utm)
+                            else:
+                                ls_utm = LineString(utm_pts)
+                                buffer_candidates = [1.0, 5.0, 10.0, 50.0, 100.0]  # meter
+                                buf_poly = None
+                                for b in buffer_candidates:
+                                    try:
+                                        buf = ls_utm.buffer(b)
+                                        if buf is not None and buf.geom_type.lower() in ("polygon", "multipolygon") and buf.area > 0:
+                                            # convert exterior coords of largest polygon back to WGS84
+                                            poly_utm = buf
+                                            # choose exterior of largest polygon if multipolygon
+                                            if poly_utm.geom_type.lower() == "multipolygon":
+                                                # pick largest part
+                                                parts = list(poly_utm.geoms)
+                                                parts.sort(key=lambda p: p.area, reverse=True)
+                                                poly_utm = parts[0]
+                                            exterior_coords = list(poly_utm.exterior.coords)
+                                            try:
+                                                wgs_coords = [to_wgs.transform(x, y) for (x, y) in exterior_coords]
+                                                candidate = Polygon(wgs_coords)
+                                                if candidate.is_valid and candidate.area > 0:
+                                                    buf_poly = candidate
+                                                    if DEBUG:
+                                                        st.write(f"DEBUG: buffer LineString berhasil dengan b={b} m, area_wgs={candidate.area}")
+                                                    break
+                                            except Exception as e:
+                                                if DEBUG:
+                                                    st.write("DEBUG: gagal convert buffer->WGS:", e)
+                                if buf_poly is not None:
+                                    poly = buf_poly
+                                    valid_polygon = True
+                                else:
+                                    if DEBUG:
+                                        st.write("DEBUG: semua percobaan buffer LineString gagal, mencoba MultiPoint.buffer")
+
+                                # 4) fallback: MultiPoint.buffer di UTM (sering berhasil untuk cluster titik)
+                                if not valid_polygon:
+                                    try:
+                                        mp_utm = MultiPoint(utm_pts)
+                                        for b in buffer_candidates:
+                                            try:
+                                                buf = mp_utm.buffer(b)
+                                                if buf is not None and buf.area > 0:
+                                                    poly_utm = buf
+                                                    if poly_utm.geom_type.lower() == "multipolygon":
+                                                        parts = list(poly_utm.geoms)
+                                                        parts.sort(key=lambda p: p.area, reverse=True)
+                                                        poly_utm = parts[0]
+                                                    exterior_coords = list(poly_utm.exterior.coords)
+                                                    wgs_coords = [to_wgs.transform(x, y) for (x, y) in exterior_coords]
+                                                    candidate = Polygon(wgs_coords)
+                                                    if candidate.is_valid and candidate.area > 0:
+                                                        poly = candidate
+                                                        valid_polygon = True
+                                                        if DEBUG:
+                                                            st.write(f"DEBUG: MultiPoint.buffer berhasil b={b} m, area_wgs={candidate.area}")
+                                                        break
+                                            except Exception as e:
+                                                if DEBUG:
+                                                    st.write("DEBUG: MultiPoint.buffer error untuk b=", b, e)
+                                    except Exception as e:
+                                        if DEBUG:
+                                            st.write("DEBUG: pembuatan MultiPoint UTM error:", e)
+
+                        except Exception as e:
+                            if DEBUG:
+                                st.write("DEBUG: transform UTM gagal:", e)
+
+                    # terakhir, jika valid polygon -> simpan, jika tidak -> simpan titik saja dan beritahu user
                     if valid_polygon and poly is not None:
                         gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
                         gdf_polygon = fix_geometry(gdf_polygon)
                         st.success(f"Berhasil mengekstrak **{len(coords)} titik** dan membentuk polygon ✅")
                     else:
-                        # fallback: simpan titik saja dan peringatkan user
                         gdf_polygon = None
-                        st.warning("Koordinat terdeteksi tetapi gagal membentuk polygon yang valid. Titik disimpan; silakan cek urutan/kelengkapan koordinat di PDF.")
+                        st.warning("Koordinat ditemukan tetapi masih gagal membentuk polygon yang valid. Titik disimpan; silakan aktifkan DEBUG untuk melihat rincian.")
                         if DEBUG:
-                            st.write("DEBUG: contoh 10 koordinat pertama:", coords[:10])
+                            st.write("DEBUG: contoh 20 koordinat:", coords[:20])
                 except Exception as e:
                     st.error(f"Gagal membuat geometry dari koordinat: {e}")
                     if DEBUG:
                         st.exception(e)
-
             else:
                 st.warning("Tidak ada koordinat ditemukan dalam PDF.")
         elif uploaded.name.lower().endswith(".zip"):
@@ -368,13 +433,11 @@ with col2:
 # Analisis Luas PKKPR (tampilan rapat/standar)
 # =====================================================
 if gdf_polygon is not None:
-    # Luas PKKPR Dokumen (teks asli dari dokumen)
     if luas_pkkpr_doc:
         st.write(f"Luas PKKPR Dokumen :  {luas_pkkpr_doc}")
     else:
         st.write("Luas PKKPR Dokumen :  (tidak ditemukan di dokumen)")
 
-    # centroid & area calculations
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -391,7 +454,6 @@ if gdf_polygon is not None:
         if DEBUG:
             st.write("DEBUG: Gagal menghitung luas Mercator:", e)
 
-    # tampilkan dalam satu baris, dua spasi setelah titik dua — rapat (standar) antar baris
     st.write(f"Luas PKKPR (UTM {utm_zone}):  {format_angka_id(luas_utm) + ' m²' if luas_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas PKKPR (Mercator):  {format_angka_id(luas_merc) + ' m²' if luas_merc is not None else '(gagal menghitung)'}")
 
@@ -424,7 +486,6 @@ if uploaded_tapak and gdf_polygon is not None:
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("Analisis Luas Overlay")
 
-    # Luas Tapak Mercator
     try:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         luas_tapak_merc = gdf_tapak_3857.area.sum()
@@ -433,7 +494,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak Mercator:", e)
 
-    # Luas Tapak UTM (menggunakan zona UTM dari centroid PKKPR)
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     try:
@@ -444,7 +504,6 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak UTM:", e)
 
-    # Overlap (hitung di UTM untuk presisi)
     try:
         gdf_polygon_utm = gdf_polygon.to_crs(utm_epsg)
         inter = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection")
@@ -454,10 +513,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung overlap UTM:", e)
 
-    # tampilkan Tapak Mercator (rapat)
     st.write(f"Luas Tapak Mercator :  {format_angka_id(luas_tapak_merc) + ' m²' if luas_tapak_merc is not None else '(gagal menghitung)'}")
-
-    # tiga baris overlay, rapat/standar
     st.write(f"Luas Tapak UTM {utm_zone} :  {format_angka_id(luas_tapak_utm) + ' m²' if luas_tapak_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas Tapak di dalam PKKPR UTM {utm_zone} :  {format_angka_id(luas_overlap) + ' m²' if luas_overlap is not None else '(gagal menghitung)'}")
     if luas_tapak_utm is not None and luas_overlap is not None:
@@ -506,33 +562,26 @@ import matplotlib.lines as mlines
 
 if gdf_polygon is not None:
     try:
-        # Konversi ke koordinat basemap
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
 
         fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
 
-        # Plot PKKPR Polygon
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
 
-        # Plot Tapak Proyek (jika ada)
         if 'gdf_tapak' in locals() and gdf_tapak is not None:
             gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
 
-        # Plot Titik PKKPR (jika ada)
         if gdf_points is not None and not gdf_points.empty:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
 
-        # Tambahkan basemap (citra satelit)
         ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
-        # Atur batas tampilan peta
         ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
         ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
         ax.axis("off")
 
-        # === Tambahkan legenda di pojok kanan atas ===
         legend_elements = [
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
@@ -550,13 +599,11 @@ if gdf_polygon is not None:
             title_fontsize=9
         )
 
-        # Simpan peta ke PNG buffer
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
 
-        # Tombol download
         st.download_button("⬇️ Download Peta PNG", data=buf, file_name="Peta_Overlay.png", mime="image/png")
 
     except Exception as e:
