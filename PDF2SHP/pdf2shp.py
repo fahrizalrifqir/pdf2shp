@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -435,49 +434,58 @@ if gdf_polygon is not None:
             st.exception(e)
 
 # =====================================================
-# Layout PNG — tombol download + legenda
+# Layout PNG — tombol download + legenda (pojok kanan atas)
 # =====================================================
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
 if gdf_polygon is not None:
     try:
-        # Konversi ke koordinat proyeksi basemap
+        # Konversi ke koordinat basemap
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
 
         fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
 
-        # Plot polygon PKKPR
+        # Plot PKKPR Polygon
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
 
-        # Plot Tapak Proyek jika ada
+        # Plot Tapak Proyek (jika ada)
         if 'gdf_tapak' in locals() and gdf_tapak is not None:
             gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
 
-        # Plot Titik PKKPR jika ada
+        # Plot Titik PKKPR (jika ada)
         if gdf_points is not None and not gdf_points.empty:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
 
-        # Tambahkan basemap
+        # Tambahkan basemap (citra satelit)
         ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
-        # Set tampilan peta
+        # Atur batas tampilan peta
         ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
         ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
         ax.axis("off")
 
-        # === Tambahkan legenda ===
+        # === Tambahkan legenda di pojok kanan atas ===
         legend_elements = [
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
             mlines.Line2D([], [], color="orange", marker="o", markeredgecolor="black", linestyle="None",
                           markersize=8, label="PKKPR (Titik)")
         ]
-        ax.legend(handles=legend_elements, loc="lower right", fontsize=9, frameon=True, facecolor="white")
+        ax.legend(
+            handles=legend_elements,
+            loc="upper right",
+            fontsize=9,
+            frameon=True,
+            facecolor="white",
+            edgecolor="black",
+            title="Keterangan",
+            title_fontsize=9
+        )
 
-        # Simpan ke buffer PNG
+        # Simpan peta ke PNG buffer
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
@@ -490,5 +498,6 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
 
