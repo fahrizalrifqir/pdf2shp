@@ -140,19 +140,22 @@ def try_parse_float(s):
         return None
 
 # ======================
-# PDF parsing: fokus ke tabel Bujur / Lintang (DMS LS/BT)
+# PDF parsing: fokus ke tabel Bujur / Lintang (DMS LS/BT) + decimal columns
 # ======================
 def extract_tables_and_coords_from_pdf(uploaded_file):
     """
     Tujuan utama: deteksi tabel dengan header 'Bujur' & 'Lintang' (atau 'Bujur (BT)' dll.)
     dan ekstrak nilai DMS di bawahnya. Jika tidak menemukan tabel semacam itu,
     fallback ke scanning tabel/page secara umum (seperti sebelumnya).
+    Versi ini juga mendukung kolom lintang/bujur dalam format desimal,
+    dan akan otomatis membalik pasangan jika diperlukan (kolom terbalik).
     """
     coords_disetujui, coords_dimohon, coords_plain = [], [], []
     luas_disetujui, luas_dimohon, luas_plain = None, None, None
 
     # pola untuk menemukan DMS (termasuk BT/LS)
     dms_pattern_generic = re.compile(r"\d{1,3}\s*[°º]?\s*\d{1,2}\s*['’]?\s*\d{1,2}(?:[.,]\d+)?\s*(?:BT|BB|LS|LU|N|S|E|W)\b", flags=re.IGNORECASE)
+    # pola untuk angka desimal/angka dengan koma
     num_pattern = re.compile(r"-?\d{1,3}(?:[.,]\d+)+")
     current_mode = "plain"
 
@@ -190,28 +193,68 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 bujur_col = None
                 lintang_col = None
                 for col in df.columns:
-                    if "bujur" in col or "longitude" in col or "long" == col:
+                    if "bujur" in col or "longitude" in col or col == "long":
                         bujur_col = col
-                    if "lintang" in col or "latitude" in col or "lat" == col:
+                    if "lintang" in col or "latitude" in col or col == "lat":
                         lintang_col = col
 
+                # Jika ada kolom yang diberi label 'bujur' dan 'lintang'
                 if bujur_col and lintang_col:
                     if DEBUG:
                         st.write(f"DEBUG: Ditemukan tabel Bujur/Lintang di halaman {page.page_number}, kolom: {bujur_col}, {lintang_col}")
                         st.write(df[[bujur_col, lintang_col]].head(10).to_string(index=False))
-                    # iterasi baris dan parse DMS di kolom tersebut
+
+                    # iterasi baris dan parse DMS atau desimal
                     for _, row in df.iterrows():
-                        raw_bujur = str(row[bujur_col]) if bujur_col in row else ""
-                        raw_lintang = str(row[lintang_col]) if lintang_col in row else ""
-                        lon = dms_to_decimal(raw_bujur)
-                        lat = dms_to_decimal(raw_lintang)
-                        if lon is not None and lat is not None:
-                            if current_mode == "disetujui":
-                                coords_disetujui.append((lon, lat))
-                            elif current_mode == "dimohon":
-                                coords_dimohon.append((lon, lat))
+                        raw_bujur = "" if bujur_col not in row else str(row[bujur_col])
+                        raw_lintang = "" if lintang_col not in row else str(row[lintang_col])
+
+                        # deteksi apakah cell mengandung indikasi DMS
+                        def looks_like_dms(s):
+                            if not s:
+                                return False
+                            s_u = str(s).upper()
+                            return any(sym in s_u for sym in ["°", "º", "'", "’", '"', "”", "BT", "BB", "LS", "LU", "N", "S", "E", "W"])
+
+                        # parse bujur
+                        if looks_like_dms(raw_bujur):
+                            lon_candidate = dms_to_decimal(raw_bujur)
+                        else:
+                            lon_candidate = try_parse_float(raw_bujur)
+
+                        # parse lintang
+                        if looks_like_dms(raw_lintang):
+                            lat_candidate = dms_to_decimal(raw_lintang)
+                        else:
+                            lat_candidate = try_parse_float(raw_lintang)
+
+                        # Jika keduanya berhasil di-parse, lakukan validasi dan koreksi urutan
+                        if lon_candidate is not None and lat_candidate is not None:
+                            lon = lon_candidate
+                            lat = lat_candidate
+
+                            # Jika nilai tidak cocok bounds Indonesia, coba balik (mungkin kolom terbalik)
+                            if not (95 <= lon <= 141 and -11 <= lat <= 6):
+                                if 95 <= lat <= 141 and -11 <= lon <= 6:
+                                    lon, lat = lat, lon  # swap
+                                    if DEBUG:
+                                        st.write(f"DEBUG: Menemukan pair terbalik, menukar -> lon={lon}, lat={lat}")
+
+                            # akhirnya masukkan jika sesuai bounds
+                            if 95 <= lon <= 141 and -11 <= lat <= 6:
+                                if current_mode == "disetujui":
+                                    coords_disetujui.append((lon, lat))
+                                elif current_mode == "dimohon":
+                                    coords_dimohon.append((lon, lat))
+                                else:
+                                    coords_plain.append((lon, lat))
                             else:
-                                coords_plain.append((lon, lat))
+                                if DEBUG:
+                                    st.write(f"DEBUG: Pair setelah validasi tidak masuk bounds: raw_bujur={raw_bujur}, raw_lintang={raw_lintang}, parsed=({lon_candidate},{lat_candidate})")
+                        else:
+                            # Jika parsing gagal di sini, biarkan fallback teks melakukan pencarian lain
+                            if DEBUG:
+                                st.write(f"DEBUG: Gagal parse pasangan di tabel: '{raw_bujur}' / '{raw_lintang}'")
                     # selesai dengan tabel ini, lanjut halaman berikutnya
                     continue
 
@@ -276,7 +319,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             else:
                                 coords_plain.append((lon, lat))
                         continue
-                # fallback: cari dua angka desimal di satu baris (mis. 112,8000 7,2345)
+                # fallback: cari dua angka desimal di satu baris (mis. 112,8000 2,2138)
                 nums = num_pattern.findall(line)
                 if len(nums) >= 2:
                     parsed = [try_parse_float(n) for n in nums]
@@ -356,7 +399,7 @@ gdf_points = None
 luas_pkkpr_doc = None
 
 with col2:
-    st.write("Petunjuk: parser akan mengecek tabel bertanda 'Bujur' & 'Lintang' (format DMS LS/BT).")
+    st.write("Petunjuk: parser akan mengecek tabel bertanda 'Bujur' & 'Lintang' (format DMS LS/BT) atau kolom desimal Lintang/Bujur.")
     if DEBUG:
         st.write("DEBUG mode aktif — info detail akan tampil.")
     if uploaded:
