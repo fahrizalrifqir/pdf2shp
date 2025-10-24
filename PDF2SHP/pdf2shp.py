@@ -2,7 +2,7 @@ import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, tempfile, re, math
-from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection
+from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection, MultiPoint, LineString
 from shapely.validation import make_valid
 import folium
 from streamlit_folium import st_folium
@@ -103,6 +103,7 @@ def fix_geometry(gdf):
 
 # ======================
 # PDF PARSER LENGKAP
+# (TIDAK DIUBAH — tetap menangani DMS, desimal, UTM, dll)
 # ======================
 def extract_tables_and_coords_from_pdf(uploaded_file):
     def dms_to_decimal(dms_str):
@@ -167,7 +168,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 l = line.lower()
 
                 if "luas" in l:
-                    window = " ".join([lines[i] for i in range(idx, min(idx+4, len(lines)))])
+                    window = " ".join([lines[i] for i in range(idx, min(idx+4, len(lines)))] )
                     parsed = parse_luas_line(window)
                     if parsed:
                         win_low = window.lower()
@@ -274,17 +275,81 @@ with col2:
             coords = parsed["coords"]
             luas_pkkpr_doc = parsed["luas"]
             if coords:
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
+                # --------------------------
+                # BLOK DITINGKATKAN: buat geometry robust dari coords
+                # (mengganti pembuatan Polygon langsung agar tidak menghasilkan garis)
+                # --------------------------
                 try:
-                    gdf_points = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in coords], crs="EPSG:4326")
-                    gdf_polygon = gpd.GeoDataFrame(geometry=[Polygon(coords)], crs="EPSG:4326")
-                    gdf_polygon = fix_geometry(gdf_polygon)
-                    st.success(f"Berhasil mengekstrak **{len(coords)} titik** dari PDF ✅")
+                    # pastikan ring tertutup (jika memang dimaksudkan sebagai polygon)
+                    if coords[0] != coords[-1]:
+                        coords.append(coords[0])
+
+                    # buat GeoDataFrame titik dulu (tetap mempertahankan titik asli)
+                    pts = [Point(x, y) for x, y in coords]
+                    gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
+
+                    # coba buat polygon langsung dari coords
+                    poly = None
+                    try:
+                        poly = Polygon(coords)
+                    except Exception:
+                        poly = None
+
+                    valid_polygon = False
+                    if poly is not None:
+                        try:
+                            if poly.is_valid and poly.area and poly.geom_type.lower() == "polygon":
+                                valid_polygon = True
+                        except:
+                            valid_polygon = False
+
+                    # jika polygon tidak valid atau area = 0, coba alternatif
+                    if not valid_polygon:
+                        mp = MultiPoint(pts)
+                        alt = mp.convex_hull  # coba convex hull
+                        if alt is not None and alt.geom_type.lower() == "polygon" and alt.area > 0:
+                            poly = alt
+                            valid_polygon = True
+                        else:
+                            # Jika convex_hull masih LineString (titik kolinear), lakukan buffer di UTM
+                            avg_lon = sum([p.x for p in pts]) / len(pts)
+                            avg_lat = sum([p.y for p in pts]) / len(pts)
+                            utm_epsg, utm_zone = get_utm_info(avg_lon, avg_lat)
+
+                            try:
+                                to_utm = Transformer.from_crs("epsg:4326", f"epsg:{utm_epsg}", always_xy=True)
+                                to_wgs = Transformer.from_crs(f"epsg:{utm_epsg}", "epsg:4326", always_xy=True)
+
+                                # konversi ke UTM lalu buat LineString dan buffer 1 meter
+                                ls_utm_coords = [to_utm.transform(p.x, p.y) for p in pts]
+                                ls_utm = LineString(ls_utm_coords)
+                                buf_utm = ls_utm.buffer(1.0)  # buffer 1 meter (ubah jika perlu)
+
+                                # convert polygon buffer kembali ke WGS84
+                                buf_wgs_coords = [to_wgs.transform(x, y) for (x, y) in buf_utm.exterior.coords]
+                                poly = Polygon(buf_wgs_coords)
+                                if poly is not None and poly.is_valid and poly.area > 0:
+                                    valid_polygon = True
+                            except Exception as e:
+                                if DEBUG:
+                                    st.write("DEBUG: Gagal membuat buffer UTM:", e)
+
+                    # jika berhasil bentuk polygon valid, simpan
+                    if valid_polygon and poly is not None:
+                        gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+                        gdf_polygon = fix_geometry(gdf_polygon)
+                        st.success(f"Berhasil mengekstrak **{len(coords)} titik** dan membentuk polygon ✅")
+                    else:
+                        # fallback: simpan titik saja dan peringatkan user
+                        gdf_polygon = None
+                        st.warning("Koordinat terdeteksi tetapi gagal membentuk polygon yang valid. Titik disimpan; silakan cek urutan/kelengkapan koordinat di PDF.")
+                        if DEBUG:
+                            st.write("DEBUG: contoh 10 koordinat pertama:", coords[:10])
                 except Exception as e:
                     st.error(f"Gagal membuat geometry dari koordinat: {e}")
                     if DEBUG:
                         st.exception(e)
+
             else:
                 st.warning("Tidak ada koordinat ditemukan dalam PDF.")
         elif uploaded.name.lower().endswith(".zip"):
@@ -498,6 +563,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
-
-
-
