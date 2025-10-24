@@ -1,11 +1,9 @@
-# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, tempfile, re, math
 from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection
 from shapely.validation import make_valid
-from shapely import affinity
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
@@ -30,6 +28,11 @@ INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
 # HELPERS
 # ======================
 def format_angka_id(value):
+    """
+    Format numeric value ke gaya Indonesia: ribuan pake titik, desimal pake koma.
+    Input: float/int/str (jika str yang berisi angka akan dicoba konversi).
+    Output: string, tanpa satuan.
+    """
     try:
         val = float(value)
         if abs(val - round(val)) < 0.001:
@@ -49,33 +52,21 @@ def get_utm_info(lon, lat):
 
 def parse_luas_line(line):
     """
-    Mencoba mengekstrak nilai luas dari sebuah baris teks (atau window beberapa baris).
-    Mengembalikan string terformat seperti "2.007 Ha" atau "1.234 m²",
-    atau None jika gagal.
+    Ekstrak nilai luas dari teks (window). Kembalikan string seperti '2.007 Ha' atau '1.234 m²'.
     """
     if not line:
         return None
     s = str(line)
     s = s.replace('\xa0', ' ').replace('\u00B2', '²').strip()
-
-    # normalisasi spasi & huruf
     s_norm = re.sub(r"\s+", " ", s).upper()
 
-    # cari pola nilai + satuan (toleran pada titik/koma)
     m = re.search(r"([0-9]+(?:[.,][0-9]+)*)\s*(M2|M²|M\s*2|HA|HEKTAR)\b", s_norm, flags=re.IGNORECASE)
     if m:
         num_raw = m.group(1)
         unit_raw = m.group(2).upper()
-        # normalisasi angka:
-        # jika ada lebih dari satu separator, hapus separator ribuan
-        if num_raw.count(",") + num_raw.count(".") > 1:
-            num_clean = re.sub(r"[.,](?=\d{3}\b)", "", num_raw)
-        else:
-            num_clean = num_raw.replace(",", ".")
         unit_out = "Ha" if "HA" in unit_raw else "m²"
-        return f"{num_clean} {unit_out}"
+        return f"{num_raw} {unit_out}"
 
-    # fallback: cari angka di baris jika tidak ada satuan langsung; caller harus menilai konteks
     m2 = re.search(r"([0-9]+(?:[.,][0-9]+)*)\b", s)
     if m2:
         return m2.group(1)
@@ -111,11 +102,9 @@ def fix_geometry(gdf):
     return gdf
 
 # ======================
-# PDF PARSER LENGKAP (HIERARKI + FORMAT CAMPUR)
+# PDF PARSER LENGKAP
 # ======================
 def extract_tables_and_coords_from_pdf(uploaded_file):
-    from pyproj import Transformer
-
     def dms_to_decimal(dms_str):
         s = dms_str.replace(",", ".").replace("°", " ").replace("'", " ").replace("\"", " ")
         s = re.sub(r"[NnSsEeWw]", "", s)
@@ -165,7 +154,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
             text = page.extract_text() or ""
             lines = text.splitlines()
 
-            # deteksi mode koordinat jika ada kata-kata spesifik
             for idx, raw_line in enumerate(lines):
                 line = raw_line.strip()
                 l = line.lower()
@@ -174,14 +162,11 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 elif "koordinat" in l and "dimohon" in l:
                     current_mode = "dimohon"
 
-            # cari luas dengan memeriksa setiap baris + jendela beberapa baris setelahnya
             for idx, raw_line in enumerate(lines):
                 line = raw_line.strip()
                 l = line.lower()
 
-                # jika baris berisi kata 'luas' -> periksa baris ini dan beberapa baris setelahnya
                 if "luas" in l:
-                    # periksa baris saat ini dan 3 baris berikutnya
                     window = " ".join([lines[i] for i in range(idx, min(idx+4, len(lines)))])
                     parsed = parse_luas_line(window)
                     if parsed:
@@ -196,7 +181,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             st.write("DEBUG: Found luas in window:", window, "->", parsed)
                         continue
 
-                # fallback: langsung parse baris
                 parsed_line = parse_luas_line(line)
                 if parsed_line:
                     if "disetujui" in l:
@@ -208,7 +192,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                     if DEBUG:
                         st.write("DEBUG: Found luas in line:", line, "->", parsed_line)
 
-            # --- proses tabel untuk koordinat seperti sebelumnya ---
             table = page.extract_table()
             if table:
                 for row in table:
@@ -247,7 +230,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                             else:
                                 coords_plain.append(pair)
 
-    # pilih prioritas coords & luas (disetujui > dimohon > plain)
     if coords_disetujui:
         coords = coords_disetujui
     elif coords_dimohon:
@@ -262,7 +244,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     else:
         luas = luas_plain
 
-    # hapus duplikat titik (dengan pembulatan)
     seen = set()
     unique_coords = []
     for xy in coords:
@@ -293,7 +274,6 @@ with col2:
             coords = parsed["coords"]
             luas_pkkpr_doc = parsed["luas"]
             if coords:
-                # pastikan polygon tertutup
                 if coords[0] != coords[-1]:
                     coords.append(coords[0])
                 try:
@@ -320,20 +300,19 @@ with col2:
             st.success("Shapefile PKKPR berhasil dimuat ✅")
 
 # =====================================================
-# Analisis Luas
+# Analisis Luas PKKPR (tampilan persis format yang diminta)
 # =====================================================
 if gdf_polygon is not None:
-    # tampilkan Luas PKKPR dokumen (persis seperti diekstrak dari PDF)
+    # Luas PKKPR Dokumen (teks asli dari dokumen)
     if luas_pkkpr_doc:
-        st.write("Luas PKKPR Dokumen :")
-        st.write(f"**{luas_pkkpr_doc}**")
+        st.write(f"Luas PKKPR Dokumen :  {luas_pkkpr_doc}")
     else:
-        st.write("Luas PKKPR Dokumen :")
-        st.write("*(tidak ditemukan di dokumen)*")
+        st.write("Luas PKKPR Dokumen :  (tidak ditemukan di dokumen)")
 
-    # centroid & perhitungan area dalam UTM dan Mercator
+    # centroid & area calculations
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
+
     try:
         luas_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
     except Exception as e:
@@ -347,11 +326,9 @@ if gdf_polygon is not None:
         if DEBUG:
             st.write("DEBUG: Gagal menghitung luas Mercator:", e)
 
-    # tampilkan sesuai format yang diminta pengguna
-    st.write(f"Luas PKKPR (UTM {utm_zone}):")
-    st.write(f"**{format_angka_id(luas_utm) + ' m²' if luas_utm is not None else '(gagal menghitung)'}**")
-    st.write(f"Luas PKKPR (Mercator):")
-    st.write(f"**{format_angka_id(luas_merc) + ' m²' if luas_merc is not None else '(gagal menghitung)'}**")
+    # tampilkan dalam satu baris, dua spasi setelah titik dua
+    st.write(f"Luas PKKPR (UTM {utm_zone}):  {format_angka_id(luas_utm) + ' m²' if luas_utm is not None else '(gagal menghitung)'}")
+    st.write(f"Luas PKKPR (Mercator):  {format_angka_id(luas_merc) + ' m²' if luas_merc is not None else '(gagal menghitung)'}")
 
     zip_bytes = save_shapefile_layers(gdf_polygon, gdf_points)
     st.download_button("⬇️ Download SHP PKKPR", zip_bytes, "PKKPR_Hasil.zip", mime="application/zip")
@@ -366,7 +343,6 @@ if uploaded_tapak and gdf_polygon is not None:
     with tempfile.TemporaryDirectory() as tmp:
         zf = zipfile.ZipFile(io.BytesIO(uploaded_tapak.read()))
         zf.extractall(tmp)
-        gdf_tapak = None
         for root, _, files in os.walk(tmp):
             for f in files:
                 if f.lower().endswith(".shp"):
@@ -378,12 +354,12 @@ if uploaded_tapak and gdf_polygon is not None:
         gdf_tapak = fix_geometry(gdf_tapak)
 
 # =====================================================
-# Analisis Overlay & Luas Tapak (tampilkan sesuai format)
+# Analisis Luas Overlay (format persis diminta)
 # =====================================================
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("Analisis Luas Overlay")
 
-    # hitung luas tapak dalam Mercator (EPSG:3857) dan UTM (berdasarkan centroid PKKPR)
+    # Luas Tapak Mercator
     try:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         luas_tapak_merc = gdf_tapak_3857.area.sum()
@@ -392,6 +368,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak Mercator:", e)
 
+    # Luas Tapak UTM (menggunakan zona UTM dari centroid PKKPR)
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     try:
@@ -402,12 +379,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak UTM:", e)
 
-    st.write(f"Luas Tapak Mercator :")
-    st.write(f"**{format_angka_id(luas_tapak_merc) + ' m²' if luas_tapak_merc is not None else '(gagal menghitung)'}**")
-    st.write(f"Luas Tapak UTM {utm_zone} :")
-    st.write(f"**{format_angka_id(luas_tapak_utm) + ' m²' if luas_tapak_utm is not None else '(gagal menghitung)'}**")
-
-    # area overlap (hitung di UTM untuk presisi)
+    # Overlap (hitung di UTM untuk presisi)
     try:
         gdf_polygon_utm = gdf_polygon.to_crs(utm_epsg)
         inter = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection")
@@ -417,15 +389,18 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung overlap UTM:", e)
 
-    st.write("")
-    st.write(f"Luas Tapak di dalam PKKPR UTM {utm_zone} :")
-    st.write(f"**{format_angka_id(luas_overlap) + ' m²' if luas_overlap is not None else '(gagal menghitung)'}**")
-    st.write(f"Luas Tapak di luar PKKPR UTM {utm_zone} :")
+    # tampilkan Tapak Mercator (sebelum header overlay, sesuai permintaan Anda sebelumnya)
+    st.write(f"Luas Tapak Mercator :  {format_angka_id(luas_tapak_merc) + ' m²' if luas_tapak_merc is not None else '(gagal menghitung)'}")
+
+    # Header Analisis Luas Overlay dan tiga baris hasilnya
+    st.write("")  # pemisah kosong
+    st.write(f"Luas Tapak UTM {utm_zone} :  {format_angka_id(luas_tapak_utm) + ' m²' if luas_tapak_utm is not None else '(gagal menghitung)'}")
+    st.write(f"Luas Tapak di dalam PKKPR UTM {utm_zone} :  {format_angka_id(luas_overlap) + ' m²' if luas_overlap is not None else '(gagal menghitung)'}")
     if luas_tapak_utm is not None and luas_overlap is not None:
         luar = luas_tapak_utm - luas_overlap
-        st.write(f"**{format_angka_id(luar) + ' m²'}**")
+        st.write(f"Luas Tapak di luar PKKPR UTM {utm_zone} :  {format_angka_id(luar) + ' m²'}")
     else:
-        st.write("**(gagal menghitung)**")
+        st.write(f"Luas Tapak di luar PKKPR UTM {utm_zone} :  (gagal menghitung)")
 
 # =====================================================
 # PREVIEW PETA
@@ -460,7 +435,7 @@ if gdf_polygon is not None:
             st.exception(e)
 
 # =====================================================
-# Layout PNG — hanya tombol download
+# Layout PNG — tombol download
 # =====================================================
 if gdf_polygon is not None:
     try:
