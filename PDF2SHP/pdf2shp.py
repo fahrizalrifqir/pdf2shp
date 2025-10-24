@@ -12,6 +12,7 @@ import contextily as ctx
 from folium.plugins import Fullscreen
 import xyzservices.providers as xyz
 from pyproj import Transformer
+from math import atan2
 
 # ======================
 # CONFIG
@@ -28,6 +29,11 @@ INDO_BOUNDS = (95.0, 141.0, -11.0, 6.0)
 # HELPERS
 # ======================
 def format_angka_id(value):
+    """
+    Format numeric value ke gaya Indonesia: ribuan pake titik, desimal pake koma.
+    Input: float/int/str (jika str yang berisi angka akan dicoba konversi).
+    Output: string, tanpa satuan.
+    """
     try:
         val = float(value)
         if abs(val - round(val)) < 0.001:
@@ -46,6 +52,9 @@ def get_utm_info(lon, lat):
     return epsg, zone_label
 
 def parse_luas_line(line):
+    """
+    Ekstrak nilai luas dari teks (window). Kembalikan string seperti '2.007 Ha' atau '1.234 m²'.
+    """
     if not line:
         return None
     s = str(line)
@@ -94,22 +103,30 @@ def fix_geometry(gdf):
     return gdf
 
 # ======================
-# PDF PARSER LENGKAP
-# (TIDAK DIUBAH — tetap menangani DMS, desimal, UTM, dll)
+# PDF PARSER (tambah dukungan BT/LS dan pola DMS lebih toleran)
 # ======================
 def extract_tables_and_coords_from_pdf(uploaded_file):
     def dms_to_decimal(dms_str):
-        s = dms_str.replace(",", ".").replace("°", " ").replace("'", " ").replace("\"", " ")
-        s = re.sub(r"[NnSsEeWw]", "", s)
-        parts = [p for p in s.split() if p.strip()]
+        # normalisasi label lokal (BT/BB/LS/LU) -> NSEW
+        s = dms_str.upper()
+        s = s.replace("BT", "E").replace("BB", "W").replace("LS", "S").replace("LU", "N")
+        s = s.replace(",", ".")
+        s = s.replace("°", " ").replace("º", " ").replace("'", " ").replace("’", " ").replace("”", " ").replace('"', " ").strip()
+        dir_match = re.search(r"\b([NSEW])\b", s)
+        direction = dir_match.group(1) if dir_match else None
+        s_clean = re.sub(r"[NSEW]", "", s).strip()
+        parts = [p for p in re.split(r"\s+", s_clean) if p != ""]
         if len(parts) == 0:
             return None
-        deg = float(parts[0])
-        minutes = float(parts[1]) if len(parts) > 1 else 0
-        seconds = float(parts[2]) if len(parts) > 2 else 0
-        val = deg + minutes / 60 + seconds / 3600
-        if any(x in dms_str.upper() for x in ["S", "W"]):
-            val *= -1
+        try:
+            deg = float(parts[0])
+            minutes = float(parts[1]) if len(parts) > 1 else 0.0
+            seconds = float(parts[2]) if len(parts) > 2 else 0.0
+        except:
+            return None
+        val = deg + minutes / 60.0 + seconds / 3600.0
+        if direction in ("S", "W"):
+            val *= -1.0
         return val
 
     def try_parse_float(s):
@@ -137,8 +154,8 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     coords_disetujui, coords_dimohon, coords_plain = [], [], []
     luas_disetujui, luas_dimohon, luas_plain = None, None, None
 
-    num_pattern = r"-?\d{1,3}(?:[.,]\d+)+"
-    dms_pattern = r"\d{1,3}[°\s]\d{1,2}['\s]\d{1,2}(?:[.,]\d+)?\s*[NSEW]"
+    num_pattern = r"-?\d{1,3}(?:[.,]\d+)?"
+    dms_pattern = r"\d{1,3}\s*[°º]?\s*\d{1,2}\s*['’]?\s*\d{1,2}(?:[.,]\d+)?\s*(?:[NSEW]|BT|BB|LS|LU)\b"
 
     current_mode = "plain"
 
@@ -147,6 +164,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
             text = page.extract_text() or ""
             lines = text.splitlines()
 
+            # deteksi mode (disetujui/dimohon) dari baris
             for idx, raw_line in enumerate(lines):
                 line = raw_line.strip()
                 l = line.lower()
@@ -155,12 +173,12 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 elif "koordinat" in l and "dimohon" in l:
                     current_mode = "dimohon"
 
+            # cari kata 'luas'
             for idx, raw_line in enumerate(lines):
                 line = raw_line.strip()
                 l = line.lower()
-
                 if "luas" in l:
-                    window = " ".join([lines[i] for i in range(idx, min(idx+4, len(lines)))] )
+                    window = " ".join([lines[i] for i in range(idx, min(idx+4, len(lines)))])
                     parsed = parse_luas_line(window)
                     if parsed:
                         win_low = window.lower()
@@ -185,44 +203,109 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                     if DEBUG:
                         st.write("DEBUG: Found luas in line:", line, "->", parsed_line)
 
+            # EKSTRAK dari tabel (jika ada)
             table = page.extract_table()
             if table:
                 for row in table:
                     if not row:
                         continue
-                    nums = []
-                    for cell in row:
-                        if not cell:
-                            continue
-                        for n in re.findall(num_pattern, str(cell)):
-                            val = try_parse_float(n)
-                            if val is not None:
-                                nums.append(val)
-                        for d in re.findall(dms_pattern, str(cell)):
-                            dec = dms_to_decimal(d)
-                            if dec is not None:
-                                nums.append(dec)
+                    row_text = " ".join([str(c) for c in row if c])
+                    found_pairs = []
+                    dms_matches = re.findall(dms_pattern, row_text, flags=re.IGNORECASE)
+                    if dms_matches and len(dms_matches) >= 2:
+                        for i in range(0, len(dms_matches)-1, 2):
+                            lon_dms = dms_matches[i]
+                            lat_dms = dms_matches[i+1]
+                            lon = dms_to_decimal(lon_dms)
+                            lat = dms_to_decimal(lat_dms)
+                            if lon is not None and lat is not None and in_indonesia(lon, lat):
+                                found_pairs.append((lon, lat))
 
-                    if len(nums) >= 2:
-                        a, b = nums[0], nums[1]
-                        pair = None
-                        if in_indonesia(a, b):
-                            pair = (a, b)
-                        elif in_indonesia(b, a):
-                            pair = (b, a)
-                        elif (100000 <= abs(a) <= 9999999) and (100000 <= abs(b) <= 9999999):
-                            utm = try_convert_utm(a, b)
-                            if utm:
-                                pair = utm
+                    if not found_pairs:
+                        nums = []
+                        for cell in row:
+                            if not cell:
+                                continue
+                            for n in re.findall(num_pattern, str(cell)):
+                                val = try_parse_float(n)
+                                if val is not None:
+                                    nums.append(val)
+                        if len(nums) >= 2:
+                            a, b = nums[0], nums[1]
+                            pair = None
+                            if in_indonesia(a, b):
+                                pair = (a, b)
+                            elif in_indonesia(b, a):
+                                pair = (b, a)
+                            elif (100000 <= abs(a) <= 9999999) and (100000 <= abs(b) <= 9999999):
+                                utm = try_convert_utm(a, b)
+                                if utm:
+                                    pair = utm
+                            if pair:
+                                found_pairs.append(pair)
 
-                        if pair:
+                    for pair in found_pairs:
+                        if current_mode == "disetujui":
+                            coords_disetujui.append(pair)
+                        elif current_mode == "dimohon":
+                            coords_dimohon.append(pair)
+                        else:
+                            coords_plain.append(pair)
+
+            # Jika tidak ada tabel, scan baris teks
+            for i in range(len(lines)):
+                line = lines[i].strip()
+                if not line:
+                    continue
+                dmss = re.findall(dms_pattern, line, flags=re.IGNORECASE)
+                if dmss and len(dmss) >= 2:
+                    lon = dms_to_decimal(dmss[0])
+                    lat = dms_to_decimal(dmss[1])
+                    if lon is not None and lat is not None and in_indonesia(lon, lat):
+                        if current_mode == "disetujui":
+                            coords_disetujui.append((lon, lat))
+                        elif current_mode == "dimohon":
+                            coords_dimohon.append((lon, lat))
+                        else:
+                            coords_plain.append((lon, lat))
+                    continue
+                if dmss and len(dmss) == 1 and i + 1 < len(lines):
+                    next_line = lines[i+1].strip()
+                    dmss2 = re.findall(dms_pattern, next_line, flags=re.IGNORECASE)
+                    if dmss2:
+                        lon = dms_to_decimal(dmss[0])
+                        lat = dms_to_decimal(dmss2[0])
+                        if lon is not None and lat is not None and in_indonesia(lon, lat):
                             if current_mode == "disetujui":
-                                coords_disetujui.append(pair)
+                                coords_disetujui.append((lon, lat))
                             elif current_mode == "dimohon":
-                                coords_dimohon.append(pair)
+                                coords_dimohon.append((lon, lat))
                             else:
-                                coords_plain.append(pair)
+                                coords_plain.append((lon, lat))
+                        continue
 
+                nums = [try_parse_float(n) for n in re.findall(num_pattern, line)]
+                nums = [n for n in nums if n is not None]
+                if len(nums) >= 2:
+                    a, b = nums[0], nums[1]
+                    pair = None
+                    if in_indonesia(a, b):
+                        pair = (a, b)
+                    elif in_indonesia(b, a):
+                        pair = (b, a)
+                    elif (100000 <= abs(a) <= 9999999) and (100000 <= abs(b) <= 9999999):
+                        utm = try_convert_utm(a, b)
+                        if utm:
+                            pair = utm
+                    if pair:
+                        if current_mode == "disetujui":
+                            coords_disetujui.append(pair)
+                        elif current_mode == "dimohon":
+                            coords_dimohon.append(pair)
+                        else:
+                            coords_plain.append(pair)
+
+    # prioritas
     if coords_disetujui:
         coords = coords_disetujui
     elif coords_dimohon:
@@ -237,6 +320,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     else:
         luas = luas_plain
 
+    # deduplicate
     seen = set()
     unique_coords = []
     for xy in coords:
@@ -260,6 +344,45 @@ gdf_polygon = None
 gdf_points = None
 luas_pkkpr_doc = None
 
+# helper functions for polygon building
+def order_points_ccw(points):
+    if not points:
+        return []
+    cx = sum([p.x for p in points]) / len(points)
+    cy = sum([p.y for p in points]) / len(points)
+    def angle(p):
+        return atan2(p.y - cy, p.x - cx)
+    pts_sorted = sorted(points, key=angle)
+    return pts_sorted
+
+def try_build_polygon_from_pts(pts, debug_prefix=""):
+    coords = [(p.x, p.y) for p in pts]
+    # polygon langsung
+    try:
+        p = Polygon(coords)
+        if p.is_valid and p.area > 0 and p.geom_type.lower() == "polygon":
+            return p, debug_prefix + "polygon_direct"
+    except Exception:
+        pass
+    # convex hull
+    try:
+        mp = MultiPoint(pts)
+        hull = mp.convex_hull
+        if hull is not None and hull.geom_type.lower() == "polygon" and hull.area > 0:
+            return hull, debug_prefix + "convex_hull"
+    except Exception:
+        pass
+    # ordered CCW
+    try:
+        pts_ccw = order_points_ccw(pts)
+        coords_ccw = [(p.x, p.y) for p in pts_ccw]
+        pccw = Polygon(coords_ccw)
+        if pccw.is_valid and pccw.area > 0 and pccw.geom_type.lower() == "polygon":
+            return pccw, debug_prefix + "ordered_ccw"
+    except Exception:
+        pass
+    return None, debug_prefix + "none"
+
 with col2:
     if uploaded:
         if uploaded.name.lower().endswith(".pdf"):
@@ -276,7 +399,7 @@ with col2:
                     pts = [Point(x, y) for x, y in coords]
                     gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
 
-                    # Debug: ringkasan variasi koordinat
+                    # Debug stats
                     xs = [p.x for p in pts]
                     ys = [p.y for p in pts]
                     xrange = max(xs) - min(xs) if pts else 0
@@ -286,49 +409,62 @@ with col2:
                         st.write("DEBUG: contoh 10 koordinat pertama:", coords[:10])
                         st.write(f"DEBUG: xrange={xrange}, yrange={yrange}")
 
+                    # ===== strategi pembuatan polygon yang lebih kuat =====
                     poly = None
                     valid_polygon = False
 
-                    # 1) coba Polygon langsung
-                    try:
-                        poly = Polygon(coords)
-                        if poly.is_valid and poly.area and poly.geom_type.lower() == "polygon":
-                            valid_polygon = True
-                            if DEBUG:
-                                st.write("DEBUG: Polygon langsung valid. area:", poly.area)
-                    except Exception as e:
+                    # Attempt A: original orientation
+                    candidate, reason = try_build_polygon_from_pts(pts, debug_prefix="A:")
+                    if candidate is not None:
+                        poly = candidate
+                        valid_polygon = True
                         if DEBUG:
-                            st.write("DEBUG: Polygon langsung gagal:", e)
-                        poly = None
+                            st.write("DEBUG: build success:", reason, "area:", poly.area)
 
-                    # 2) coba convex_hull
+                    # reversed order attempt
                     if not valid_polygon:
                         try:
-                            mp = MultiPoint(pts)
-                            alt = mp.convex_hull
-                            if alt is not None and alt.geom_type.lower() == "polygon" and alt.area > 0:
-                                poly = alt
+                            pts_reversed = list(reversed(pts))
+                            candidate, reason = try_build_polygon_from_pts(pts_reversed, debug_prefix="A_rev:")
+                            if candidate is not None:
+                                poly = candidate
                                 valid_polygon = True
                                 if DEBUG:
-                                    st.write("DEBUG: convex_hull berhasil. area:", poly.area)
+                                    st.write("DEBUG: build success reversed:", reason, "area:", poly.area)
                         except Exception as e:
                             if DEBUG:
-                                st.write("DEBUG: convex_hull error:", e)
+                                st.write("DEBUG: reversed attempt error:", e)
 
-                    # 3) kalau masih gagal -> transform ke UTM dan coba buffer LineString dengan beberapa jarak
+                    # Attempt B: detect possible swapped coordinates (lat,lon instead of lon,lat)
                     if not valid_polygon:
-                        avg_lon = sum(xs) / len(xs)
-                        avg_lat = sum(ys) / len(ys)
-                        utm_epsg, utm_zone = get_utm_info(avg_lon, avg_lat)
-                        if DEBUG:
-                            st.write("DEBUG: mencoba UTM EPSG:", utm_epsg, "zona:", utm_zone)
+                        if xrange < 1e-6 or yrange < 1e-6 or (xrange < 0.0001 and yrange > 0.01) or (yrange < 0.0001 and xrange > 0.01):
+                            if DEBUG:
+                                st.write("DEBUG: kemungkinan koordinat ter-swap (lon/lat). Mencoba swap.")
+                            try:
+                                swapped_pts = [Point(p.y, p.x) for p in pts]
+                                candidate, reason = try_build_polygon_from_pts(swapped_pts, debug_prefix="swap:")
+                                if candidate is not None:
+                                    poly = candidate
+                                    valid_polygon = True
+                                    if DEBUG:
+                                        st.write("DEBUG: build success after swap:", reason, "area:", poly.area)
+                            except Exception as e:
+                                if DEBUG:
+                                    st.write("DEBUG: swap attempt error:", e)
 
+                    # Attempt C: UTM buffering strategies (jika masih gagal)
+                    if not valid_polygon:
                         try:
+                            avg_lon = sum(xs) / len(xs)
+                            avg_lat = sum(ys) / len(ys)
+                            utm_epsg, utm_zone = get_utm_info(avg_lon, avg_lat)
+                            if DEBUG:
+                                st.write("DEBUG: mencoba UTM EPSG:", utm_epsg, "zona:", utm_zone)
+
                             to_utm = Transformer.from_crs("epsg:4326", f"epsg:{utm_epsg}", always_xy=True)
                             to_wgs = Transformer.from_crs(f"epsg:{utm_epsg}", "epsg:4326", always_xy=True)
 
                             utm_pts = [to_utm.transform(p.x, p.y) for p in pts]
-                            # jika hanya 1 titik unik -> tidak bisa
                             uniq_utm = list({(round(x,6), round(y,6)) for x,y in utm_pts})
                             if len(uniq_utm) < 2:
                                 if DEBUG:
@@ -338,7 +474,6 @@ with col2:
                                 buffer_candidates = [1.0, 5.0, 10.0, 50.0, 100.0]  # meter
                                 buf_poly = None
                                 for b in buffer_candidates:
-                                    # tanpa try-outer — tangani exception untuk conversion saja
                                     try:
                                         buf = ls_utm.buffer(b)
                                         if buf is not None and buf.geom_type.lower() in ("polygon", "multipolygon") and buf.area > 0:
@@ -370,7 +505,7 @@ with col2:
                                     if DEBUG:
                                         st.write("DEBUG: semua percobaan buffer LineString gagal, mencoba MultiPoint.buffer")
 
-                                # 4) fallback: MultiPoint.buffer di UTM (sering berhasil untuk cluster titik)
+                                # fallback: MultiPoint.buffer di UTM
                                 if not valid_polygon:
                                     try:
                                         mp_utm = MultiPoint(utm_pts)
@@ -407,7 +542,7 @@ with col2:
                             if DEBUG:
                                 st.write("DEBUG: transform UTM gagal:", e)
 
-                    # terakhir, jika valid polygon -> simpan, jika tidak -> simpan titik saja dan beritahu user
+                    # akhir strategi: simpan atau beri peringatan
                     if valid_polygon and poly is not None:
                         gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
                         gdf_polygon = fix_geometry(gdf_polygon)
@@ -417,6 +552,7 @@ with col2:
                         st.warning("Koordinat ditemukan tetapi masih gagal membentuk polygon yang valid. Titik disimpan; silakan aktifkan DEBUG untuk melihat rincian.")
                         if DEBUG:
                             st.write("DEBUG: contoh 20 koordinat:", coords[:20])
+                            st.write("DEBUG: final xrange,yrange:", xrange, yrange)
                 except Exception as e:
                     st.error(f"Gagal membuat geometry dari koordinat: {e}")
                     if DEBUG:
@@ -439,11 +575,13 @@ with col2:
 # Analisis Luas PKKPR (tampilan rapat/standar)
 # =====================================================
 if gdf_polygon is not None:
+    # Luas PKKPR Dokumen (teks asli dari dokumen)
     if luas_pkkpr_doc:
         st.write(f"Luas PKKPR Dokumen :  {luas_pkkpr_doc}")
     else:
         st.write("Luas PKKPR Dokumen :  (tidak ditemukan di dokumen)")
 
+    # centroid & area calculations
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
 
@@ -460,6 +598,7 @@ if gdf_polygon is not None:
         if DEBUG:
             st.write("DEBUG: Gagal menghitung luas Mercator:", e)
 
+    # tampilkan dalam satu baris, dua spasi setelah titik dua — rapat (standar) antar baris
     st.write(f"Luas PKKPR (UTM {utm_zone}):  {format_angka_id(luas_utm) + ' m²' if luas_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas PKKPR (Mercator):  {format_angka_id(luas_merc) + ' m²' if luas_merc is not None else '(gagal menghitung)'}")
 
@@ -492,6 +631,7 @@ if uploaded_tapak and gdf_polygon is not None:
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("Analisis Luas Overlay")
 
+    # Luas Tapak Mercator
     try:
         gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
         luas_tapak_merc = gdf_tapak_3857.area.sum()
@@ -500,6 +640,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak Mercator:", e)
 
+    # Luas Tapak UTM (menggunakan zona UTM dari centroid PKKPR)
     centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
     utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
     try:
@@ -510,6 +651,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung luas tapak UTM:", e)
 
+    # Overlap (hitung di UTM untuk presisi)
     try:
         gdf_polygon_utm = gdf_polygon.to_crs(utm_epsg)
         inter = gpd.overlay(gdf_tapak_utm, gdf_polygon_utm, how="intersection")
@@ -519,7 +661,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung overlap UTM:", e)
 
+    # tampilkan Tapak Mercator (rapat)
     st.write(f"Luas Tapak Mercator :  {format_angka_id(luas_tapak_merc) + ' m²' if luas_tapak_merc is not None else '(gagal menghitung)'}")
+
+    # tiga baris overlay, rapat/standar
     st.write(f"Luas Tapak UTM {utm_zone} :  {format_angka_id(luas_tapak_utm) + ' m²' if luas_tapak_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas Tapak di dalam PKKPR UTM {utm_zone} :  {format_angka_id(luas_overlap) + ' m²' if luas_overlap is not None else '(gagal menghitung)'}")
     if luas_tapak_utm is not None and luas_overlap is not None:
@@ -568,26 +713,33 @@ import matplotlib.lines as mlines
 
 if gdf_polygon is not None:
     try:
+        # Konversi ke koordinat basemap
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
 
         fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
 
+        # Plot PKKPR Polygon
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
 
+        # Plot Tapak Proyek (jika ada)
         if 'gdf_tapak' in locals() and gdf_tapak is not None:
             gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
 
+        # Plot Titik PKKPR (jika ada)
         if gdf_points is not None and not gdf_points.empty:
             gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
 
+        # Tambahkan basemap (citra satelit)
         ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
 
+        # Atur batas tampilan peta
         ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
         ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
         ax.axis("off")
 
+        # === Tambahkan legenda di pojok kanan atas ===
         legend_elements = [
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
@@ -605,11 +757,13 @@ if gdf_polygon is not None:
             title_fontsize=9
         )
 
+        # Simpan peta ke PNG buffer
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
         plt.close(fig)
 
+        # Tombol download
         st.download_button("⬇️ Download Peta PNG", data=buf, file_name="Peta_Overlay.png", mime="image/png")
 
     except Exception as e:
