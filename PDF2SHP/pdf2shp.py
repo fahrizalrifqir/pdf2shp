@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -300,7 +301,7 @@ with col2:
             st.success("Shapefile PKKPR berhasil dimuat ✅")
 
 # =====================================================
-# Analisis Luas PKKPR (tampilan persis format yang diminta)
+# Analisis Luas PKKPR (tampilan rapat/standar)
 # =====================================================
 if gdf_polygon is not None:
     # Luas PKKPR Dokumen (teks asli dari dokumen)
@@ -326,7 +327,7 @@ if gdf_polygon is not None:
         if DEBUG:
             st.write("DEBUG: Gagal menghitung luas Mercator:", e)
 
-    # tampilkan dalam satu baris, dua spasi setelah titik dua
+    # tampilkan dalam satu baris, dua spasi setelah titik dua — rapat (standar) antar baris
     st.write(f"Luas PKKPR (UTM {utm_zone}):  {format_angka_id(luas_utm) + ' m²' if luas_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas PKKPR (Mercator):  {format_angka_id(luas_merc) + ' m²' if luas_merc is not None else '(gagal menghitung)'}")
 
@@ -354,7 +355,7 @@ if uploaded_tapak and gdf_polygon is not None:
         gdf_tapak = fix_geometry(gdf_tapak)
 
 # =====================================================
-# Analisis Luas Overlay (format persis diminta)
+# Analisis Luas Overlay (rapat/standar)
 # =====================================================
 if gdf_polygon is not None and gdf_tapak is not None:
     st.subheader("Analisis Luas Overlay")
@@ -389,11 +390,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
         if DEBUG:
             st.write("DEBUG: Gagal hitung overlap UTM:", e)
 
-    # tampilkan Tapak Mercator (sebelum header overlay, sesuai permintaan Anda sebelumnya)
+    # tampilkan Tapak Mercator (rapat)
     st.write(f"Luas Tapak Mercator :  {format_angka_id(luas_tapak_merc) + ' m²' if luas_tapak_merc is not None else '(gagal menghitung)'}")
 
-    # Header Analisis Luas Overlay dan tiga baris hasilnya
-    st.write("")  # pemisah kosong
+    # tiga baris overlay, rapat/standar
     st.write(f"Luas Tapak UTM {utm_zone} :  {format_angka_id(luas_tapak_utm) + ' m²' if luas_tapak_utm is not None else '(gagal menghitung)'}")
     st.write(f"Luas Tapak di dalam PKKPR UTM {utm_zone} :  {format_angka_id(luas_overlap) + ' m²' if luas_overlap is not None else '(gagal menghitung)'}")
     if luas_tapak_utm is not None and luas_overlap is not None:
