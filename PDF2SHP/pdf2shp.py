@@ -124,27 +124,13 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     coords_plain = []
     text_all = ""
 
-    # gabungkan semua teks PDF
+    # Gabungkan semua teks PDF
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text_all += (page.extract_text() or "") + "\n"
 
-    # --- deteksi tabel sederhana "No X Y" / "X Y" ---
-    if re.search(r"\b(No|#)?\s*X\s+Y\b", text_all, flags=re.IGNORECASE):
-        for line in text_all.splitlines():
-            parts = re.split(r"[\s\t]+", line.strip())
-            if len(parts) >= 3:
-                try:
-                    x = float(parts[-2].replace(",", "."))
-                    y = float(parts[-1].replace(",", "."))
-                    if 95 <= x <= 141 and -11 <= y <= 6:
-                        coords_plain.append((x, y))
-                except:
-                    continue
-        if coords_plain:
-            return {"coords": coords_plain, "luas": None}
-
-    # --- deteksi tabel "Bujur/Lintang" atau "Longitude/Latitude" atau "X/Y" ---
+    # --- deteksi tabel "Bujur/Lintang" atau "Longitude/Latitude" atau "X/Y" + kolom No ---
+    coords_with_no = []
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
@@ -154,41 +140,63 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 df = pd.DataFrame(table[1:], columns=table[0])
             except:
                 df = pd.DataFrame(table)
+
+            # Normalisasi nama kolom
             df.columns = [re.sub(r"\s+", " ", str(c)).strip().lower() for c in df.columns]
 
-            bujur_col, lintang_col = None, None
+            # Deteksi kolom
+            no_col, bujur_col, lintang_col = None, None, None
             for col in df.columns:
+                if re.match(r"no\b", col):  # kolom No
+                    no_col = col
                 if any(k in col for k in ["bujur", "longitude", "long", "x"]):
                     bujur_col = col
                 if any(k in col for k in ["lintang", "latitude", "lat", "y"]):
                     lintang_col = col
+
             if bujur_col and lintang_col:
                 for _, row in df.iterrows():
+                    raw_no = row.get(no_col, None)
                     raw_bujur = str(row.get(bujur_col, "")).strip()
                     raw_lintang = str(row.get(lintang_col, "")).strip()
+
+                    # Deteksi format koordinat (DMS atau desimal)
                     def looks_like_dms(s):
                         return any(sym in s.upper() for sym in ["°", "º", "'", "’", '"', "BT", "LS", "LU", "E", "W"])
+
                     lon = dms_to_decimal(raw_bujur) if looks_like_dms(raw_bujur) else try_parse_float(raw_bujur)
                     lat = dms_to_decimal(raw_lintang) if looks_like_dms(raw_lintang) else try_parse_float(raw_lintang)
+
                     if lon and lat:
+                        # Swap jika tertukar
                         if not (95 <= lon <= 141 and -11 <= lat <= 6) and (95 <= lat <= 141 and -11 <= lon <= 6):
                             lon, lat = lat, lon
                         if 95 <= lon <= 141 and -11 <= lat <= 6:
-                            coords_plain.append((lon, lat))
+                            try:
+                                n = int(str(raw_no).strip()) if raw_no not in [None, ""] else None
+                            except:
+                                n = None
+                            coords_with_no.append((n, lon, lat))
 
-    # fallback: cari baris berisi dua angka
-    num_pattern = re.compile(r"-?\d{1,3}(?:[.,]\d+)+")
-    for line in text_all.splitlines():
-        nums = num_pattern.findall(line)
-        if len(nums) >= 2:
-            a, b = try_parse_float(nums[0]), try_parse_float(nums[1])
-            if a and b:
-                if 95 <= a <= 141 and -11 <= b <= 6:
-                    coords_plain.append((a, b))
-                elif 95 <= b <= 141 and -11 <= a <= 6:
-                    coords_plain.append((b, a))
+    # Jika ada nomor, urutkan berdasarkan nomor
+    if coords_with_no:
+        coords_with_no.sort(key=lambda x: (x[0] if x[0] is not None else 99999))
+        coords_plain = [(lon, lat) for _, lon, lat in coords_with_no]
 
-    # hapus duplikat
+    # --- fallback: cari pola umum jika tabel tidak ada ---
+    if not coords_plain:
+        num_pattern = re.compile(r"-?\d{1,3}(?:[.,]\d+)+")
+        for line in text_all.splitlines():
+            nums = num_pattern.findall(line)
+            if len(nums) >= 2:
+                a, b = try_parse_float(nums[0]), try_parse_float(nums[1])
+                if a and b:
+                    if 95 <= a <= 141 and -11 <= b <= 6:
+                        coords_plain.append((a, b))
+                    elif 95 <= b <= 141 and -11 <= a <= 6:
+                        coords_plain.append((b, a))
+
+    # Hapus duplikat
     seen, unique_coords = set(), []
     for xy in coords_plain:
         key = (round(xy[0], 6), round(xy[1], 6))
@@ -197,6 +205,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
             seen.add(key)
 
     return {"coords": unique_coords, "luas": None}
+
 
 # ======================
 # AUTO SORT KOORDINAT
@@ -395,4 +404,5 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
+
 
