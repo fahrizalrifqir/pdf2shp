@@ -1,4 +1,4 @@
-# full_streamlit_pkkpr.py
+# full_streamlit_pkkpr.py (modified)
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -123,6 +123,7 @@ def dms_to_decimal(dms_str):
 def extract_tables_and_coords_from_pdf(uploaded_file):
     coords_plain = []
     text_all = ""
+    ordered_from_table = False
 
     # Gabungkan semua teks PDF
     with pdfplumber.open(uploaded_file) as pdf:
@@ -162,7 +163,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 
                     # Deteksi format koordinat (DMS atau desimal)
                     def looks_like_dms(s):
-                        return any(sym in s.upper() for sym in ["°", "º", "'", "’", '"', "BT", "LS", "LU", "E", "W"])
+                        return any(sym in s.upper() for sym in ["°", "º", "'", "’", '"', "BT", "LS", "LU", "E", "W"]) 
 
                     lon = dms_to_decimal(raw_bujur) if looks_like_dms(raw_bujur) else try_parse_float(raw_bujur)
                     lat = dms_to_decimal(raw_lintang) if looks_like_dms(raw_lintang) else try_parse_float(raw_lintang)
@@ -178,10 +179,11 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                                 n = None
                             coords_with_no.append((n, lon, lat))
 
-    # Jika ada nomor, urutkan berdasarkan nomor
+    # Jika ada nomor, urutkan berdasarkan nomor — dan tandai bahwa ini adalah urutan asli dari tabel
     if coords_with_no:
         coords_with_no.sort(key=lambda x: (x[0] if x[0] is not None else 99999))
         coords_plain = [(lon, lat) for _, lon, lat in coords_with_no]
+        ordered_from_table = True
 
     # --- fallback: cari pola umum jika tabel tidak ada ---
     if not coords_plain:
@@ -196,7 +198,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                     elif 95 <= b <= 141 and -11 <= a <= 6:
                         coords_plain.append((b, a))
 
-    # Hapus duplikat
+    # Hapus duplikat (tetap mempertahankan urutan pertama kali muncul)
     seen, unique_coords = set(), []
     for xy in coords_plain:
         key = (round(xy[0], 6), round(xy[1], 6))
@@ -204,7 +206,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
             unique_coords.append(xy)
             seen.add(key)
 
-    return {"coords": unique_coords, "luas": None}
+    return {"coords": unique_coords, "luas": None, "ordered": ordered_from_table}
 
 
 # ======================
@@ -238,8 +240,11 @@ with col2:
             parsed = extract_tables_and_coords_from_pdf(uploaded)
             coords = parsed["coords"]
             luas_pkkpr_doc = parsed["luas"]
+            ordered_flag = parsed.get("ordered", False)
             if coords:
-                coords = sort_coords_clockwise(coords)
+                # Jika koordinat berasal dari kolom tabel (ada nomor), gunakan urutan tabel asli
+                if not ordered_flag:
+                    coords = sort_coords_clockwise(coords)
                 if coords[0] != coords[-1]:
                     coords.append(coords[0])
                 pts = [Point(x, y) for x, y in coords]
@@ -350,7 +355,7 @@ if gdf_polygon is not None:
 
 # =====================================================
 # Layout PNG — tombol download + legenda (pojok kanan atas)
-# =====================================================
+# ======================================================
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
@@ -404,5 +409,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
-
-
