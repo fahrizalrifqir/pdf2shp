@@ -355,32 +355,108 @@ if gdf_polygon is not None:
 
 # =====================================================
 # Layout PNG — tombol download + legenda (pojok kanan atas)
-# ======================================================
+# =====================================================
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 
 if gdf_polygon is not None:
     try:
+        # Pastikan polygon dalam CRS WebMercator untuk contextily
         gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857)
+
+        # Jika area terlalu kecil, tambahkan buffer kecil agar contextily tidak menghitung zoom terlalu tinggi
+        try:
+            total_area = gdf_poly_3857.area.sum()
+        except Exception:
+            total_area = 0
+        if total_area > 0 and total_area < 5000:  # kurang dari 5.000 m² (opsional ambang)
+            gdf_poly_3857["geometry"] = gdf_poly_3857.geometry.buffer(10)  # buffer 10 m
+
         xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
 
         fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
 
+        # gambar polygon PKKPR
         gdf_poly_3857.plot(ax=ax, facecolor="none", edgecolor="yellow", linewidth=2.5)
 
+        # gambar tapak jika ada
         if 'gdf_tapak' in locals() and gdf_tapak is not None:
-            gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
+            try:
+                gdf_tapak.to_crs(epsg=3857).plot(ax=ax, facecolor="red", alpha=0.4)
+            except Exception:
+                # jika to_crs gagal, plot langsung (kecepatan fallback)
+                try:
+                    gdf_tapak.plot(ax=ax, facecolor="red", alpha=0.4)
+                except Exception:
+                    if DEBUG:
+                        st.write("Gagal plot gdf_tapak di layout PNG.")
 
+        # gambar titik jika ada
         if gdf_points is not None and not gdf_points.empty:
-            gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
+            try:
+                gdf_points.to_crs(epsg=3857).plot(ax=ax, color="orange", markersize=20)
+            except Exception:
+                try:
+                    gdf_points.plot(ax=ax, color="orange", markersize=20)
+                except Exception:
+                    if DEBUG:
+                        st.write("Gagal plot gdf_points di layout PNG.")
 
-        ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+        # Tambahkan basemap dengan pengaturan zoom aman dan fallback berlapis
+        basemap_drawn = False
+        try:
+            # Hitung zoom yang sesuai dari extent dan ukuran figure (menghindari over-zoom)
+            try:
+                # contextily expects (xmin, ymin, xmax, ymax)
+                zoom = ctx.calculate_zoom(gdf_poly_3857.total_bounds, ax.figure.get_size_inches()[0] * 100)
+            except Exception:
+                zoom = None
+            if zoom is not None:
+                zoom = int(min(zoom, 19))  # batasi zoom maksimum agar provider tile ada
+            # coba Esri dulu
+            try:
+                if zoom is not None:
+                    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery, zoom=zoom)
+                else:
+                    ctx.add_basemap(ax, crs=3857, source=ctx.providers.Esri.WorldImagery)
+                basemap_drawn = True
+            except Exception as e_esri:
+                if DEBUG:
+                    st.write(f"Esri basemap gagal (zoom={zoom}): {e_esri}")
+                # fallback ke OSM
+                try:
+                    fallback_zoom = 17 if zoom is None else int(min(zoom, 17))
+                    ctx.add_basemap(ax, crs=3857, source=ctx.providers.OpenStreetMap.Mapnik, zoom=fallback_zoom)
+                    basemap_drawn = True
+                except Exception as e_osm:
+                    if DEBUG:
+                        st.write(f"OpenStreetMap basemap juga gagal: {e_osm}")
+                    # tidak dapat memuat basemap — atur background netral dan beri catatan kecil
+                    ax.set_facecolor("#dcdcdc")
+                    ax.text(
+                        0.01, 0.01, "Basemap not available",
+                        transform=ax.transAxes, fontsize=8, color="gray",
+                        bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+                    )
+                    basemap_drawn = False
+        except Exception as e_all:
+            # proteksi ekstra
+            if DEBUG:
+                st.write("Error saat mencoba menambahkan basemap:", e_all)
+            ax.set_facecolor("#dcdcdc")
+            ax.text(
+                0.01, 0.01, "Basemap not available",
+                transform=ax.transAxes, fontsize=8, color="gray",
+                bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+            )
 
+        # Set limits dengan padding kecil
         ax.set_xlim(xmin - (xmax - xmin) * 0.05, xmax + (xmax - xmin) * 0.05)
         ax.set_ylim(ymin - (ymax - ymin) * 0.05, ymax + (ymax - ymin) * 0.05)
         ax.set_title("Peta Kesesuaian Tapak Proyek dengan PKKPR", fontsize=14)
         ax.axis("off")
 
+        # Legend — tetap seperti semula
         legend_elements = [
             mpatches.Patch(facecolor="none", edgecolor="yellow", linewidth=2, label="PKKPR (Polygon)"),
             mpatches.Patch(facecolor="red", edgecolor="red", alpha=0.4, label="Tapak Proyek"),
@@ -398,6 +474,7 @@ if gdf_polygon is not None:
             title_fontsize=9
         )
 
+        # Simpan ke buffer dan sediakan tombol download (sama seperti sebelumnya)
         buf = io.BytesIO()
         plt.savefig(buf, format="png", bbox_inches="tight", dpi=200)
         buf.seek(0)
