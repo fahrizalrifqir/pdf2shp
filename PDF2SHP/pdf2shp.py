@@ -96,25 +96,59 @@ def try_parse_float(s):
         return None
 
 def dms_to_decimal(dms_str):
+    """
+    Konversi koordinat DMS (Derajat-Menit-Detik) ke Desimal.
+    Menerima berbagai format umum seperti:
+    - 110°12'30" BT
+    - 7°30'15" LS
+    - 110 12 30 E
+    - 7 30 15 S
+    - 110.12.30 E (pakai titik)
+    - 110°12.5' E
+    """
     if not dms_str or not isinstance(dms_str, str):
         return None
-    s = dms_str.upper()
+    s = dms_str.strip().upper()
+    # Normalisasi simbol dan pemisah
+    s = (
+        s.replace(",", ".")
+         .replace("º", "°")
+         .replace("’", "'")
+         .replace("‘", "'")
+         .replace("″", '"')
+         .replace("”", '"')
+         .replace("“", '"')
+         .replace("  ", " ")
+    )
+
+    # Ganti label arah Indonesia ke internasional
     s = s.replace("BT", "E").replace("BB", "W").replace("LS", "S").replace("LU", "N")
-    s = s.replace(",", ".")
-    s = s.replace("°", " ").replace("'", " ").replace("’", " ").replace('"', ' ')
-    dir_match = re.search(r"\b([NSEW])\b", s)
-    direction = dir_match.group(1) if dir_match else None
-    s_clean = re.sub(r"[NSEW]", "", s).strip()
-    parts = [p for p in re.split(r"\s+", s_clean) if p]
-    if not parts:
+
+    # Ambil arah (jika ada)
+    direction_match = re.search(r"\b([NSEW])\b", s)
+    direction = direction_match.group(1) if direction_match else None
+    s = re.sub(r"[NSEW]", "", s).strip()
+
+    # Ekstrak angka (derajat, menit, detik)
+    dms_pattern = re.findall(r"[-+]?\d+(?:\.\d+)?", s)
+    if not dms_pattern:
         return None
+
     try:
-        deg, minutes, seconds = float(parts[0]), float(parts[1]) if len(parts) > 1 else 0, float(parts[2]) if len(parts) > 2 else 0
-    except:
+        deg = float(dms_pattern[0])
+        minutes = float(dms_pattern[1]) if len(dms_pattern) > 1 else 0.0
+        seconds = float(dms_pattern[2]) if len(dms_pattern) > 2 else 0.0
+    except Exception:
         return None
-    val = deg + minutes / 60 + seconds / 3600
-    if direction in ("S", "W"):
+
+    # Konversi ke desimal
+    val = deg + (minutes / 60.0) + (seconds / 3600.0)
+    if direction in ["S", "W"]:
         val *= -1
+
+    # Validasi angka
+    if not (-180 <= val <= 180):
+        return None
     return val
 
 # ======================
@@ -486,3 +520,4 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
+
