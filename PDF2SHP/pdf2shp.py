@@ -1,4 +1,4 @@
-# full_streamlit_pkkpr.py
+# full_streamlit_pkkpr.py (updated)
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -244,7 +244,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     return {"coords": unique_coords, "luas": None, "ordered": ordered_from_table}
 
 # ======================
-# AUTO SORT KOORDINAT (TETAPI TIDAK DIGUNAKAN UNTUK PEMBUATAN POLYGON)
+# AUTO SORT KOORDINAT
 # ======================
 def sort_coords_clockwise(coords):
     if not coords:
@@ -276,40 +276,78 @@ with col2:
             luas_pkkpr_doc = parsed["luas"]
             ordered_flag = parsed.get("ordered", False)
             if coords:
-                # Gunakan urutan tabel apa adanya (jika berasal dari tabel bernomor, urutan sesuai No;
-                # jika berasal dari fallback teks, urutan sesuai kemunculan dalam teks)
+                # Jika koordinat berasal dari kolom tabel (ada nomor), gunakan urutan tabel asli
+                # jika tidak, kita urutkan searah jarum jam untuk membentuk polygon yang wajar
                 pts = [Point(x, y) for x, y in coords]
                 gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
 
-                # -------------------------------
-                # BUAT POLYGON SESUAI URUTAN TABEL
-                # -------------------------------
-                coords_proc = coords.copy()  # gunakan urutan tabel apa adanya
+                # --- PERBAIKAN DAN PENCIPTAAN POLYGON DENGAN BEBERAPA STRATEGI ---
+                # Siapkan koordinat (salin agar tidak mengubah coords asli)
+                coords_proc = coords.copy()
+                # Jika koordinat bukan hasil pembacaan tabel bernomor, urutkan searah jarum jam
+                if not ordered_flag:
+                    coords_proc = sort_coords_clockwise(coords_proc)
 
-                # Pastikan ring tertutup (tambahkan titik pertama di akhir jika perlu)
+                # Pastikan ring tertutup
                 if coords_proc[0] != coords_proc[-1]:
                     coords_proc.append(coords_proc[0])
 
                 poly_candidate = None
                 tried = []
 
-                # Coba buat polygon langsung sesuai urutan tabel
                 try:
+                    # Coba buat polygon langsung
                     poly_candidate = Polygon(coords_proc)
-                    tried.append("Polygon(raw order)")
+                    tried.append("Polygon(raw coords)")
+                    # Jika tidak valid coba 'buffer(0)' yang sering memperbaiki self-intersections
+                    if not getattr(poly_candidate, "is_valid", False) or getattr(poly_candidate, "area", 0) == 0:
+                        try:
+                            poly_candidate = poly_candidate.buffer(0)
+                            tried.append("buffer(0)")
+                        except Exception as e_buf:
+                            if DEBUG:
+                                st.write("buffer(0) gagal:", e_buf)
+
+                    # Jika masih tidak valid, coba polygonize_full (mencoba polygon dari garis)
+                    if (not getattr(poly_candidate, "is_valid", False)) or getattr(poly_candidate, "area", 0) == 0:
+                        try:
+                            ls = LineString(coords_proc)
+                            polys, dangles, cuts, invalids = polygonize_full(ls)
+                            if polys:
+                                # polygonize_full dapat mengembalikan generator-like; ambil polygon terbesar
+                                try:
+                                    poly_list = list(polys)
+                                except Exception:
+                                    # jika polys sudah berupa list-like
+                                    poly_list = polys
+                                if poly_list:
+                                    poly_candidate = max(poly_list, key=lambda p: p.area)
+                                    tried.append("polygonize_full")
+                        except Exception as e_polyz:
+                            if DEBUG:
+                                st.write("polygonize_full gagal:", e_polyz)
+
+                    # Fallback terakhir: convex hull dari titik (menghilangkan lekukan kecil)
+                    if (poly_candidate is None) or (not getattr(poly_candidate, "is_valid", False)) or getattr(poly_candidate, "area", 0) == 0:
+                        mp = MultiPoint(coords_proc)
+                        ch = mp.convex_hull
+                        if ch.geom_type == "Polygon" and ch.area > 0:
+                            poly_candidate = ch
+                            tried.append("convex_hull")
                 except Exception as e_poly:
                     poly_candidate = None
                     if DEBUG:
-                        st.write("Gagal membuat polygon langsung:", e_poly)
+                        st.write("Error saat mencoba membuat polygon:", e_poly)
 
-                # Tanpa perbaikan tambahan (tidak ada buffer(0), tidak ada make_valid)
-                # Jika polygon valid dan berluas > 0, simpan; jika tidak, hanya titik yang disimpan
+                # Hasil akhir: jika valid, simpan; jika tidak, hanya titik
                 if poly_candidate is not None and getattr(poly_candidate, "is_valid", False) and getattr(poly_candidate, "area", 0) > 0:
                     gdf_polygon = gpd.GeoDataFrame(geometry=[poly_candidate], crs="EPSG:4326")
-                    st.success(f"Polygon berhasil dibuat sesuai urutan tabel koordinat (metode: {', '.join(tried)})")
+                    gdf_polygon = fix_geometry(gdf_polygon)
+                    st.success(f"Berhasil mengekstrak {len(coords)} titik dan membentuk polygon ✅ (metode: {', '.join(tried)})")
                 else:
+                    # Jika polygon masih tidak valid, simpan titik saja dan jelaskan kenapa
                     gdf_polygon = None
-                    st.warning("Polygon tidak valid saat dibuat mengikuti urutan tabel. Hanya titik yang disimpan.")
+                    st.warning("Koordinat terbaca, tetapi polygon tidak valid — hanya titik disimpan. Dicoba metode: " + (", ".join(tried) if tried else "tidak ada"))
             else:
                 st.warning("Tidak ada koordinat ditemukan dalam PDF.")
         elif uploaded.name.lower().endswith(".zip"):
