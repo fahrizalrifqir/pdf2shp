@@ -1,4 +1,4 @@
-# full_streamlit_pkkpr.py (updated)
+# full_streamlit_pkkpr.py
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -244,7 +244,7 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     return {"coords": unique_coords, "luas": None, "ordered": ordered_from_table}
 
 # ======================
-# AUTO SORT KOORDINAT
+# AUTO SORT KOORDINAT (TETAPI TIDAK DIGUNAKAN UNTUK PEMBUATAN POLYGON)
 # ======================
 def sort_coords_clockwise(coords):
     if not coords:
@@ -276,61 +276,77 @@ with col2:
             luas_pkkpr_doc = parsed["luas"]
             ordered_flag = parsed.get("ordered", False)
             if coords:
-                # Jika koordinat berasal dari kolom tabel (ada nomor), gunakan urutan tabel asli
-                # jika tidak, kita urutkan searah jarum jam untuk membentuk polygon yang wajar
+                # Gunakan urutan tabel apa adanya (jika berasal dari tabel bernomor, urutan sesuai No;
+                # jika berasal dari fallback teks, urutan sesuai kemunculan dalam teks)
                 pts = [Point(x, y) for x, y in coords]
                 gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
 
-                                # -------------------------------
+                # -------------------------------
                 # BUAT POLYGON SESUAI URUTAN TABEL
                 # -------------------------------
-                coords_proc = coords.copy()  # JANGAN diurutkan ulang
+                coords_proc = coords.copy()  # gunakan urutan tabel apa adanya
 
-                # Pastikan ring tertutup
+                # Pastikan ring tertutup (tambahkan titik pertama di akhir jika perlu)
                 if coords_proc[0] != coords_proc[-1]:
                     coords_proc.append(coords_proc[0])
 
                 poly_candidate = None
                 tried = []
 
-                # 1. Coba polygon langsung sesuai urutan tabel
+                # Coba buat polygon langsung sesuai urutan tabel
                 try:
                     poly_candidate = Polygon(coords_proc)
                     tried.append("Polygon(raw order)")
-                except Exception:
+                except Exception as e_poly:
                     poly_candidate = None
+                    if DEBUG:
+                        st.write("Gagal membuat polygon langsung:", e_poly)
 
-                # 2. Jika tidak valid, coba buffer(0) (TIDAK mengubah urutan)
-                if poly_candidate is not None:
-                    if (not poly_candidate.is_valid) or (poly_candidate.area == 0):
-                        try:
-                            poly_candidate = poly_candidate.buffer(0)
-                            tried.append("buffer(0)")
-                        except Exception:
-                            pass
-
-                # 3. Jika masih tidak valid, coba make_valid (juga tidak mengubah urutan aslinya)
-                if (poly_candidate is None) or (not poly_candidate.is_valid) or (poly_candidate.area == 0):
-                    try:
-                        poly_candidate = make_valid(Polygon(coords_proc))
-                        tried.append("make_valid")
-                    except Exception:
-                        poly_candidate = None
-
-                # 4. Final: hanya terima polygon valid
-                if poly_candidate is not None and poly_candidate.is_valid and poly_candidate.area > 0:
+                # Tanpa perbaikan tambahan (tidak ada buffer(0), tidak ada make_valid)
+                # Jika polygon valid dan berluas > 0, simpan; jika tidak, hanya titik yang disimpan
+                if poly_candidate is not None and getattr(poly_candidate, "is_valid", False) and getattr(poly_candidate, "area", 0) > 0:
                     gdf_polygon = gpd.GeoDataFrame(geometry=[poly_candidate], crs="EPSG:4326")
-                    st.success(
-                        f"Polygon berhasil dibuat sesuai urutan tabel koordinat "
-                        f"(metode: {', '.join(tried)})"
-                    )
+                    st.success(f"Polygon berhasil dibuat sesuai urutan tabel koordinat (metode: {', '.join(tried)})")
                 else:
                     gdf_polygon = None
-                    st.warning(
-                        "Polygon tidak valid meskipun sudah mengikuti urutan tabel. "
-                        "Hanya titik yang disimpan."
-                    )
+                    st.warning("Polygon tidak valid saat dibuat mengikuti urutan tabel. Hanya titik yang disimpan.")
+            else:
+                st.warning("Tidak ada koordinat ditemukan dalam PDF.")
+        elif uploaded.name.lower().endswith(".zip"):
+            with tempfile.TemporaryDirectory() as tmp:
+                zf = zipfile.ZipFile(io.BytesIO(uploaded.read()))
+                zf.extractall(tmp)
+                for root, _, files in os.walk(tmp):
+                    for f in files:
+                        if f.lower().endswith(".shp"):
+                            try:
+                                gdf_polygon = gpd.read_file(os.path.join(root, f))
+                                break
+                            except Exception as e_shp:
+                                if DEBUG:
+                                    st.write("Gagal membaca shapefile:", e_shp)
+            if gdf_polygon is not None:
+                gdf_polygon = fix_geometry(gdf_polygon)
+                st.success("Shapefile PKKPR berhasil dimuat ✅")
+            else:
+                st.warning("ZIP tidak berisi shapefile yang valid.")
 
+# ======================
+# ANALISIS LUAS
+# ======================
+if gdf_polygon is not None:
+    centroid = gdf_polygon.to_crs(epsg=4326).geometry.centroid.iloc[0]
+    utm_epsg, utm_zone = get_utm_info(centroid.x, centroid.y)
+    luas_utm = gdf_polygon.to_crs(epsg=utm_epsg).area.sum()
+    luas_merc = gdf_polygon.to_crs(epsg=3857).area.sum()
+
+    st.write(f"Luas UTM {utm_zone}: {format_angka_id(luas_utm)} m²")
+    st.write(f"Luas Mercator: {format_angka_id(luas_merc)} m²")
+    if luas_pkkpr_doc:
+        st.write(f"Luas dokumen: {luas_pkkpr_doc}")
+
+    zip_bytes = save_shapefile_layers(gdf_polygon, gdf_points)
+    st.download_button("⬇️ Download SHP PKKPR", zip_bytes, "PKKPR_Hasil.zip", mime="application/zip")
 
 # ======================
 # UPLOAD TAPAK
@@ -536,4 +552,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
-
