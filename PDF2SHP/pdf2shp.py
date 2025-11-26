@@ -1,10 +1,11 @@
-# full_streamlit_pkkpr.py (modified)
+# full_streamlit_pkkpr.py (updated)
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
 import io, os, zipfile, tempfile, re, math
-from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection
+from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection, MultiPoint, LineString
 from shapely.validation import make_valid
+from shapely.ops import unary_union, polygonize_full
 import folium
 from streamlit_folium import st_folium
 import pdfplumber
@@ -242,7 +243,6 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
 
     return {"coords": unique_coords, "luas": None, "ordered": ordered_from_table}
 
-
 # ======================
 # AUTO SORT KOORDINAT
 # ======================
@@ -277,23 +277,77 @@ with col2:
             ordered_flag = parsed.get("ordered", False)
             if coords:
                 # Jika koordinat berasal dari kolom tabel (ada nomor), gunakan urutan tabel asli
-                if not ordered_flag:
-                    coords = sort_coords_clockwise(coords)
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0])
+                # jika tidak, kita urutkan searah jarum jam untuk membentuk polygon yang wajar
                 pts = [Point(x, y) for x, y in coords]
                 gdf_points = gpd.GeoDataFrame(geometry=pts, crs="EPSG:4326")
+
+                # --- PERBAIKAN DAN PENCIPTAAN POLYGON DENGAN BEBERAPA STRATEGI ---
+                # Siapkan koordinat (salin agar tidak mengubah coords asli)
+                coords_proc = coords.copy()
+                # Jika koordinat bukan hasil pembacaan tabel bernomor, urutkan searah jarum jam
+                if not ordered_flag:
+                    coords_proc = sort_coords_clockwise(coords_proc)
+
+                # Pastikan ring tertutup
+                if coords_proc[0] != coords_proc[-1]:
+                    coords_proc.append(coords_proc[0])
+
+                poly_candidate = None
+                tried = []
+
                 try:
-                    poly = Polygon(coords)
-                    if poly.is_valid and poly.area > 0:
-                        gdf_polygon = gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
-                        gdf_polygon = fix_geometry(gdf_polygon)
-                        st.success(f"Berhasil mengekstrak {len(coords)} titik dan membentuk polygon ✅")
-                    else:
-                        st.warning("Koordinat terbaca, tetapi polygon tidak valid — hanya titik disimpan.")
-                except Exception as e:
-                    st.error("Gagal membentuk polygon.")
-                    if DEBUG: st.exception(e)
+                    # Coba buat polygon langsung
+                    poly_candidate = Polygon(coords_proc)
+                    tried.append("Polygon(raw coords)")
+                    # Jika tidak valid coba 'buffer(0)' yang sering memperbaiki self-intersections
+                    if not getattr(poly_candidate, "is_valid", False) or getattr(poly_candidate, "area", 0) == 0:
+                        try:
+                            poly_candidate = poly_candidate.buffer(0)
+                            tried.append("buffer(0)")
+                        except Exception as e_buf:
+                            if DEBUG:
+                                st.write("buffer(0) gagal:", e_buf)
+
+                    # Jika masih tidak valid, coba polygonize_full (mencoba polygon dari garis)
+                    if (not getattr(poly_candidate, "is_valid", False)) or getattr(poly_candidate, "area", 0) == 0:
+                        try:
+                            ls = LineString(coords_proc)
+                            polys, dangles, cuts, invalids = polygonize_full(ls)
+                            if polys:
+                                # polygonize_full dapat mengembalikan generator-like; ambil polygon terbesar
+                                try:
+                                    poly_list = list(polys)
+                                except Exception:
+                                    # jika polys sudah berupa list-like
+                                    poly_list = polys
+                                if poly_list:
+                                    poly_candidate = max(poly_list, key=lambda p: p.area)
+                                    tried.append("polygonize_full")
+                        except Exception as e_polyz:
+                            if DEBUG:
+                                st.write("polygonize_full gagal:", e_polyz)
+
+                    # Fallback terakhir: convex hull dari titik (menghilangkan lekukan kecil)
+                    if (poly_candidate is None) or (not getattr(poly_candidate, "is_valid", False)) or getattr(poly_candidate, "area", 0) == 0:
+                        mp = MultiPoint(coords_proc)
+                        ch = mp.convex_hull
+                        if ch.geom_type == "Polygon" and ch.area > 0:
+                            poly_candidate = ch
+                            tried.append("convex_hull")
+                except Exception as e_poly:
+                    poly_candidate = None
+                    if DEBUG:
+                        st.write("Error saat mencoba membuat polygon:", e_poly)
+
+                # Hasil akhir: jika valid, simpan; jika tidak, hanya titik
+                if poly_candidate is not None and getattr(poly_candidate, "is_valid", False) and getattr(poly_candidate, "area", 0) > 0:
+                    gdf_polygon = gpd.GeoDataFrame(geometry=[poly_candidate], crs="EPSG:4326")
+                    gdf_polygon = fix_geometry(gdf_polygon)
+                    st.success(f"Berhasil mengekstrak {len(coords)} titik dan membentuk polygon ✅ (metode: {', '.join(tried)})")
+                else:
+                    # Jika polygon masih tidak valid, simpan titik saja dan jelaskan kenapa
+                    gdf_polygon = None
+                    st.warning("Koordinat terbaca, tetapi polygon tidak valid — hanya titik disimpan. Dicoba metode: " + (", ".join(tried) if tried else "tidak ada"))
             else:
                 st.warning("Tidak ada koordinat ditemukan dalam PDF.")
         elif uploaded.name.lower().endswith(".zip"):
@@ -303,10 +357,17 @@ with col2:
                 for root, _, files in os.walk(tmp):
                     for f in files:
                         if f.lower().endswith(".shp"):
-                            gdf_polygon = gpd.read_file(os.path.join(root, f))
-                            break
-            gdf_polygon = fix_geometry(gdf_polygon)
-            st.success("Shapefile PKKPR berhasil dimuat ✅")
+                            try:
+                                gdf_polygon = gpd.read_file(os.path.join(root, f))
+                                break
+                            except Exception as e_shp:
+                                if DEBUG:
+                                    st.write("Gagal membaca shapefile:", e_shp)
+            if gdf_polygon is not None:
+                gdf_polygon = fix_geometry(gdf_polygon)
+                st.success("Shapefile PKKPR berhasil dimuat ✅")
+            else:
+                st.warning("ZIP tidak berisi shapefile yang valid.")
 
 # ======================
 # ANALISIS LUAS
@@ -338,8 +399,12 @@ if uploaded_tapak and gdf_polygon is not None:
         for root, _, files in os.walk(tmp):
             for f in files:
                 if f.lower().endswith(".shp"):
-                    gdf_tapak = gpd.read_file(os.path.join(root, f))
-                    break
+                    try:
+                        gdf_tapak = gpd.read_file(os.path.join(root, f))
+                        break
+                    except Exception as e_shp2:
+                        if DEBUG:
+                            st.write("Gagal membaca shapefile tapak:", e_shp2)
     if gdf_tapak is not None:
         gdf_tapak = fix_geometry(gdf_tapak)
         st.success("Tapak berhasil dimuat ✅")
@@ -354,8 +419,13 @@ if gdf_polygon is not None and gdf_tapak is not None:
     gdf_tapak_utm = gdf_tapak.to_crs(utm_epsg)
     luas_tapak = gdf_tapak_utm.area.sum()
     gdf_pkkpr_utm = gdf_polygon.to_crs(utm_epsg)
-    inter = gpd.overlay(gdf_tapak_utm, gdf_pkkpr_utm, how="intersection")
-    luas_overlap = inter.area.sum()
+    try:
+        inter = gpd.overlay(gdf_tapak_utm, gdf_pkkpr_utm, how="intersection")
+        luas_overlap = inter.area.sum()
+    except Exception as e_ov:
+        luas_overlap = 0
+        if DEBUG:
+            st.write("Overlay gagal:", e_ov)
     st.write(f"Luas Tapak UTM {utm_zone}: {format_angka_id(luas_tapak)} m²")
     st.write(f"Luas di dalam PKKPR: {format_angka_id(luas_overlap)} m²")
     st.write(f"Luas di luar PKKPR: {format_angka_id(luas_tapak - luas_overlap)} m²")
@@ -520,4 +590,3 @@ if gdf_polygon is not None:
         st.error(f"Gagal membuat peta: {e}")
         if DEBUG:
             st.exception(e)
-
