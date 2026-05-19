@@ -806,40 +806,38 @@ if gdf_polygon is not None:
 
     try:
 
-        gdf_poly_3857 = (
-            gdf_polygon
-            .to_crs(3857)
-            .copy()
+        # ============================================
+        # CONVERT CRS
+        # ============================================
+        gdf_poly_3857 = gdf_polygon.to_crs(epsg=3857).copy()
+
+        gdf_poly_3857["geometry"] = (
+            gdf_poly_3857.geometry
+            .buffer(0)
         )
 
-        xmin, ymin, xmax, ymax = (
-            gdf_poly_3857.total_bounds
-        )
+        # ============================================
+        # EXTENT
+        # ============================================
+        xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
 
-        padx = (xmax - xmin) * 0.08
-        pady = (ymax - ymin) * 0.08
+        width = xmax - xmin
+        height = ymax - ymin
 
+        padx = width * 0.08
+        pady = height * 0.08
+
+        # ============================================
+        # FIGURE
+        # ============================================
         fig, ax = plt.subplots(
             figsize=(10, 10),
             dpi=300
         )
 
-        # basemap
-        try:
-
-            ctx.add_basemap(
-                ax,
-                crs=gdf_poly_3857.crs,
-                source=ctx.providers.Esri.WorldImagery,
-                zoom=18
-            )
-
-        except Exception as e:
-
-            if DEBUG:
-                st.write(e)
-
-        # polygon
+        # ============================================
+        # PLOT DULU POLYGON
+        # ============================================
         gdf_poly_3857.plot(
             ax=ax,
             facecolor="none",
@@ -850,29 +848,54 @@ if gdf_polygon is not None:
             zorder=5
         )
 
-        # tapak
+        # ============================================
+        # TAPAK
+        # ============================================
         if gdf_tapak is not None:
 
-            gdf_tapak.to_crs(3857).plot(
-                ax=ax,
-                facecolor="red",
-                edgecolor="red",
-                alpha=0.35,
-                linewidth=1.5,
-                zorder=4
-            )
+            try:
 
-        # points
-        if gdf_points is not None:
+                gdf_tapak_3857 = gdf_tapak.to_crs(epsg=3857)
 
-            gdf_points.to_crs(3857).plot(
-                ax=ax,
-                color="orange",
-                edgecolor="black",
-                markersize=30,
-                zorder=6
-            )
+                gdf_tapak_3857.plot(
+                    ax=ax,
+                    facecolor="red",
+                    edgecolor="red",
+                    alpha=0.35,
+                    linewidth=1.5,
+                    zorder=4
+                )
 
+            except Exception as e:
+
+                if DEBUG:
+                    st.write("Plot tapak gagal:", e)
+
+        # ============================================
+        # TITIK
+        # ============================================
+        if gdf_points is not None and not gdf_points.empty:
+
+            try:
+
+                gdf_points_3857 = gdf_points.to_crs(epsg=3857)
+
+                gdf_points_3857.plot(
+                    ax=ax,
+                    color="orange",
+                    edgecolor="black",
+                    markersize=30,
+                    zorder=6
+                )
+
+            except Exception as e:
+
+                if DEBUG:
+                    st.write("Plot titik gagal:", e)
+
+        # ============================================
+        # SET EXTENT DULU
+        # ============================================
         ax.set_xlim(
             xmin - padx,
             xmax + padx
@@ -883,14 +906,53 @@ if gdf_polygon is not None:
             ymax + pady
         )
 
+        # ============================================
+        # BARU TAMBAH BASEMAP
+        # ============================================
+        try:
+
+            ctx.add_basemap(
+                ax,
+                source=ctx.providers.Esri.WorldImagery,
+                crs=gdf_poly_3857.crs.to_string(),
+                zoom=19
+            )
+
+        except Exception as e:
+
+            if DEBUG:
+                st.write("Esri gagal:", e)
+
+            try:
+
+                ctx.add_basemap(
+                    ax,
+                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    crs=gdf_poly_3857.crs.to_string(),
+                    zoom=18
+                )
+
+            except Exception as e2:
+
+                if DEBUG:
+                    st.write("OSM gagal:", e2)
+
+                ax.set_facecolor("#d9d9d9")
+
+        # ============================================
+        # TITLE
+        # ============================================
         ax.set_title(
             "Peta Kesesuaian Tapak Proyek dengan PKKPR",
-            fontsize=14
+            fontsize=14,
+            pad=15
         )
 
         ax.axis("off")
 
-        # legend
+        # ============================================
+        # LEGEND
+        # ============================================
         legend_elements = [
 
             mpatches.Patch(
@@ -929,12 +991,16 @@ if gdf_polygon is not None:
             title="Keterangan"
         )
 
+        # ============================================
+        # SAVE PNG
+        # ============================================
         buf = io.BytesIO()
 
         plt.savefig(
             buf,
             format="png",
             bbox_inches="tight",
+            pad_inches=0.2,
             dpi=300
         )
 
