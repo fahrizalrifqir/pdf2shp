@@ -621,9 +621,20 @@ if gdf_polygon is not None:
         .area.sum()
     )
 
+    luas_mercator = (
+        gdf_polygon
+        .to_crs(epsg=3857)
+        .area.sum()
+    )
+
     st.write(
         f"Luas UTM {utm_zone}: "
         f"{format_angka_id(luas_utm)} m²"
+    )
+
+    st.write(
+        f"Luas Proyeksi Mercator (EPSG:3857): "
+        f"{format_angka_id(luas_mercator)} m²"
     )
 
     zip_bytes = save_shapefile_layers(
@@ -719,6 +730,7 @@ if gdf_polygon is not None and gdf_tapak is not None:
     luas_overlap = inter.area.sum()
 
     luas_tapak = gdf_tapak_utm.area.sum()
+    luas_di_luar = max(0, luas_tapak - luas_overlap)
 
     st.write(
         f"Luas Tapak: "
@@ -728,6 +740,11 @@ if gdf_polygon is not None and gdf_tapak is not None:
     st.write(
         f"Luas Overlay: "
         f"{format_angka_id(luas_overlap)} m²"
+    )
+
+    st.write(
+        f"Luas Tapak di luar PKKPR: "
+        f"{format_angka_id(luas_di_luar)} m²"
     )
 
 # =========================================================
