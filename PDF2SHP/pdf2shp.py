@@ -863,8 +863,8 @@ if gdf_polygon is not None:
         width = xmax - xmin
         height = ymax - ymin
 
-        padx = width * 0.08
-        pady = height * 0.08
+        padx = max(width * 0.08, 50)
+        pady = max(height * 0.08, 50)
 
         # ============================================
         # FIGURE
@@ -950,11 +950,26 @@ if gdf_polygon is not None:
         # ============================================
         try:
 
+            extent_width = xmax - xmin
+            extent_height = ymax - ymin
+            max_extent = max(extent_width, extent_height)
+
+            if max_extent < 300:
+                dynamic_zoom = 21
+            elif max_extent < 800:
+                dynamic_zoom = 20
+            elif max_extent < 2000:
+                dynamic_zoom = 19
+            elif max_extent < 5000:
+                dynamic_zoom = 18
+            else:
+                dynamic_zoom = 17
+
             ctx.add_basemap(
                 ax,
                 source=ctx.providers.Esri.WorldImagery,
                 crs=gdf_poly_3857.crs.to_string(),
-                zoom=19
+                zoom=dynamic_zoom
             )
 
         except Exception as e:
