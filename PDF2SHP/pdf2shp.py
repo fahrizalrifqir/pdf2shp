@@ -754,10 +754,15 @@ if gdf_polygon is not None:
 
     st.subheader("🌍 Preview Peta")
 
-    centroid = (
-        gdf_polygon.to_crs(4326)
-        .geometry.centroid.iloc[0]
-    )
+    if gdf_tapak is not None:
+        combined_preview = pd.concat([
+            gdf_polygon.to_crs(4326),
+            gdf_tapak.to_crs(4326)
+        ], ignore_index=True)
+    else:
+        combined_preview = gdf_polygon.to_crs(4326)
+
+    centroid = combined_preview.geometry.unary_union.centroid
 
     m = folium.Map(
         location=[centroid.y, centroid.x],
@@ -806,6 +811,12 @@ if gdf_polygon is not None:
                 popup=f"Titik {i+1}"
             ).add_to(m)
 
+    bounds = combined_preview.total_bounds
+    m.fit_bounds([
+        [bounds[1], bounds[0]],
+        [bounds[3], bounds[2]]
+    ])
+
     folium.LayerControl().add_to(m)
 
     st_folium(
@@ -833,10 +844,21 @@ if gdf_polygon is not None:
             .buffer(0)
         )
 
+        if gdf_tapak is not None:
+            gdf_tapak_extent = gdf_tapak.to_crs(epsg=3857).copy()
+            gdf_tapak_extent["geometry"] = gdf_tapak_extent.geometry.buffer(0)
+
+            extent_gdf = pd.concat([
+                gdf_poly_3857,
+                gdf_tapak_extent
+            ], ignore_index=True)
+        else:
+            extent_gdf = gdf_poly_3857
+
         # ============================================
         # EXTENT
         # ============================================
-        xmin, ymin, xmax, ymax = gdf_poly_3857.total_bounds
+        xmin, ymin, xmax, ymax = extent_gdf.total_bounds
 
         width = xmax - xmin
         height = ymax - ymin
