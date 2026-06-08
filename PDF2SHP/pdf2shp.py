@@ -223,108 +223,138 @@ def parse_coords_from_text_block(block):
             if xy:
                 coords.append(xy)
 
-    seen = set()
-    unique = []
-
-    for xy in coords:
-        key = (round(xy[0], 6), round(xy[1], 6))
-
-        if key not in seen:
-            unique.append(xy)
-            seen.add(key)
-
-    return unique
+    return coords
 
 
 def extract_tables_and_coords_from_pdf(uploaded_file):
+
+    uploaded_file.seek(0)
+
+    coords_with_no = []
+
+    # =====================================================
+    # PRIORITAS 1 : BACA SEMUA TABEL PDF
+    # =====================================================
+    with pdfplumber.open(uploaded_file) as pdf:
+
+        for page in pdf.pages:
+
+            try:
+                tables = page.extract_tables()
+            except:
+                tables = []
+
+            for table in tables:
+
+                if not table or len(table) < 2:
+                    continue
+
+                try:
+                    df = pd.DataFrame(
+                        table[1:],
+                        columns=table[0]
+                    )
+                except:
+                    continue
+
+                df.columns = [
+                    re.sub(r"\s+", " ", str(c)).strip().lower()
+                    for c in df.columns
+                ]
+
+                no_col = None
+                bujur_col = None
+                lintang_col = None
+
+                for c in df.columns:
+
+                    if "no" in c:
+                        no_col = c
+
+                    if any(x in c for x in [
+                        "bujur",
+                        "longitude",
+                        "long",
+                        "x"
+                    ]):
+                        bujur_col = c
+
+                    if any(x in c for x in [
+                        "lintang",
+                        "latitude",
+                        "lat",
+                        "y"
+                    ]):
+                        lintang_col = c
+
+                if not (bujur_col and lintang_col):
+                    continue
+
+                for _, row in df.iterrows():
+
+                    lon = parse_any_coordinate(
+                        row.get(bujur_col)
+                    )
+
+                    lat = parse_any_coordinate(
+                        row.get(lintang_col)
+                    )
+
+                    xy = normalize_lon_lat(
+                        lon,
+                        lat
+                    )
+
+                    if not xy:
+                        continue
+
+                    try:
+                        n = int(
+                            str(
+                                row.get(no_col)
+                            ).strip()
+                        )
+                    except:
+                        n = 999999
+
+                    coords_with_no.append(
+                        (n, xy)
+                    )
+
+    # =====================================================
+    # JIKA TABEL BERHASIL DIBACA
+    # =====================================================
+    if coords_with_no:
+
+        coords_with_no.sort(
+            key=lambda x: x[0]
+        )
+
+        coords = [
+            xy
+            for _, xy in coords_with_no
+        ]
+
+        return coords, True
+
+    # =====================================================
+    # FALLBACK TEXT PARSER
+    # =====================================================
     uploaded_file.seek(0)
 
     full_text = ""
 
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
-            full_text += (page.extract_text() or "") + "\n"
+            full_text += (
+                page.extract_text() or ""
+            ) + "\n"
 
-    # PRIORITAS 1
-    match = re.search(
-        r'Tabel\s+Koordinat\s+yang\s+disetujui(.*?)(Powered by TCPDF|Dokumen ini diterbitkan|$)',
-        full_text,
-        re.IGNORECASE | re.DOTALL
+    coords = parse_coords_from_text_block(
+        full_text
     )
 
-    if match:
-        coords = parse_coords_from_text_block(match.group(1))
-
-        if len(coords) >= 3:
-            return coords, True
-
-    # PRIORITAS 2
-    match = re.search(
-        r'Tabel\s+Koordinat\s+yang\s+dimohonkan(.*?)(Powered by TCPDF|Dokumen ini diterbitkan|$)',
-        full_text,
-        re.IGNORECASE | re.DOTALL
-    )
-
-    if match:
-        coords = parse_coords_from_text_block(match.group(1))
-
-        if len(coords) >= 3:
-            return coords, True
-
-    # FALLBACK TABLE
-    uploaded_file.seek(0)
-
-    coords_with_no = []
-
-    with pdfplumber.open(uploaded_file) as pdf:
-        for page in pdf.pages:
-            table = page.extract_table()
-
-            if not table:
-                continue
-
-            try:
-                df = pd.DataFrame(table[1:], columns=table[0])
-            except:
-                df = pd.DataFrame(table)
-
-            df.columns = [
-                re.sub(r"\s+", " ", str(c)).strip().lower()
-                for c in df.columns
-            ]
-
-            no_col = None
-            bujur_col = None
-            lintang_col = None
-
-            for c in df.columns:
-                if "no" in c:
-                    no_col = c
-
-                if any(x in c for x in ["bujur", "longitude", "long", "x"]):
-                    bujur_col = c
-
-                if any(x in c for x in ["lintang", "latitude", "lat", "y"]):
-                    lintang_col = c
-
-            if bujur_col and lintang_col:
-                for _, row in df.iterrows():
-                    lon = parse_any_coordinate(row.get(bujur_col))
-                    lat = parse_any_coordinate(row.get(lintang_col))
-
-                    xy = normalize_lon_lat(lon, lat)
-
-                    if xy:
-                        try:
-                            n = int(str(row.get(no_col)).strip())
-                        except:
-                            n = 99999
-
-                        coords_with_no.append((n, xy))
-
-    if coords_with_no:
-        coords_with_no.sort(key=lambda x: x[0])
-        coords = [x[1] for x in coords_with_no]
+    if len(coords) >= 3:
         return coords, True
 
     return [], False
