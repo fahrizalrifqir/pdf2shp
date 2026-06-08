@@ -428,74 +428,87 @@ gdf_points = None
 if uploaded:
 
     if uploaded.name.lower().endswith(".pdf"):
+
         coords, ordered = extract_tables_and_coords_from_pdf(uploaded)
 
         if coords:
+
+            st.write(f"Jumlah titik terbaca : {len(coords)}")
+
+            # ==========================
+            # TITIK KOORDINAT
+            # ==========================
             gdf_points = gpd.GeoDataFrame(
+                {
+                    "No": list(range(1, len(coords) + 1))
+                },
                 geometry=[Point(x, y) for x, y in coords],
                 crs="EPSG:4326"
             )
 
             coords_proc = coords.copy()
 
-            if not ordered:
-                coords_proc = sort_coords_clockwise(coords_proc)
-
+            # tutup polygon jika belum tertutup
             if coords_proc[0] != coords_proc[-1]:
                 coords_proc.append(coords_proc[0])
 
-            poly_candidate = None
-
             try:
+
+                # ==========================
+                # POLYGON ASLI DARI PDF
+                # ==========================
                 poly_candidate = Polygon(coords_proc)
 
-                if not poly_candidate.is_valid or poly_candidate.area == 0:
-                    poly_candidate = poly_candidate.buffer(0)
+                st.write(
+                    "Polygon valid awal :",
+                    poly_candidate.is_valid
+                )
 
-                if not poly_candidate.is_valid or poly_candidate.area == 0:
-                    ls = LineString(coords_proc)
-                    polys, _, _, _ = polygonize_full(ls)
-                    poly_list = list(polys)
+                # jika tidak valid tampilkan info
+                if not poly_candidate.is_valid:
 
-                    if poly_list:
-                        poly_candidate = max(
-                            poly_list,
-                            key=lambda p: p.area
+                    try:
+                        from shapely.validation import explain_validity
+
+                        st.warning(
+                            f"Polygon invalid : "
+                            f"{explain_validity(poly_candidate)}"
                         )
+                    except:
+                        pass
 
-            except Exception as e:
-                if DEBUG:
-                    st.write(e)
-
-            if (
-                poly_candidate is not None
-                and poly_candidate.is_valid
-                and poly_candidate.area > 0
-            ):
+                # ==========================
+                # BUAT GDF
+                # ==========================
                 gdf_polygon = gpd.GeoDataFrame(
                     geometry=[poly_candidate],
                     crs="EPSG:4326"
                 )
 
-                gdf_polygon = fix_geometry(gdf_polygon)
-
                 st.success(
                     f"Berhasil membaca PDF PKKPR ({len(coords)} titik)"
                 )
 
-            else:
-                st.error("Polygon gagal dibuat dari PDF")
+            except Exception as e:
+
+                st.error(
+                    f"Gagal membuat polygon : {e}"
+                )
+
+                gdf_polygon = None
 
         else:
             st.error("Koordinat PDF tidak ditemukan")
 
     elif uploaded.name.lower().endswith(".zip"):
+
         gdf_polygon = read_shp_zip(uploaded)
 
         if gdf_polygon is not None:
-            gdf_polygon = fix_geometry(gdf_polygon)
 
             st.success("SHP PKKPR berhasil dibaca")
+
+            st.write("CRS :", gdf_polygon.crs)
 
             show_attributes(
                 gdf_polygon,
