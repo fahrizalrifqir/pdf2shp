@@ -862,21 +862,21 @@ if gdf_polygon is not None:
         )
         with st.spinner("Membuat peta PNG..."):
 
-    fig.canvas.draw()
+                fig.canvas.draw()
 
-        buf = io.BytesIO()
-    
-        plt.savefig(
-            buf,
-            format="png",
-            bbox_inches="tight",
-            dpi=300
-        )
-    
-        buf.seek(0)
-    
-        png_bytes = buf.getvalue()
-        plt.close(fig)
+                buf = io.BytesIO()
+            
+                plt.savefig(
+                    buf,
+                    format="png",
+                    bbox_inches="tight",
+                    dpi=300
+                )
+            
+                buf.seek(0)
+            
+                png_bytes = buf.getvalue()
+                plt.close(fig)
     
         st.success("Peta PNG siap diunduh")
         
