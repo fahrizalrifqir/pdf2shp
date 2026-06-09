@@ -491,10 +491,6 @@ if uploaded:
                     crs="EPSG:4326"
                 )
 
-                st.success(
-                    f"Berhasil membaca PDF PKKPR ({len(coords)} titik)"
-                )
-
             except Exception as e:
 
                 st.error(
