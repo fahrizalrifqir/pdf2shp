@@ -433,8 +433,6 @@ if uploaded:
 
         if coords:
 
-            st.write(f"Jumlah titik terbaca : {len(coords)}")
-
             # ==========================
             # TITIK KOORDINAT
             # ==========================
@@ -459,11 +457,14 @@ if uploaded:
                 # ==========================
                 poly_candidate = Polygon(coords_proc)
 
-                st.write(
-                    "Polygon valid awal :",
-                    poly_candidate.is_valid
-                )
+                info_box.success(
+                    f"""
+                Jumlah titik : {len(coords)}
 
+                Polygon valid : {"Ya" if poly_candidate.is_valid else "Tidak"}
+                """
+                )
+               
                 # jika tidak valid tampilkan info
                 if not poly_candidate.is_valid:
 
