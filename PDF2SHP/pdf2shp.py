@@ -415,10 +415,13 @@ def save_shapefile_layers(gdf_poly, gdf_points):
 # =========================================================
 st.subheader("Upload Dokumen PKKPR")
 
-uploaded = st.file_uploader(
-    "Upload PDF / SHP ZIP",
-    type=["pdf", "zip"]
-)
+with col_upload:
+    uploaded = st.file_uploader(
+        "Upload PDF / SHP ZIP",
+        type=["pdf", "zip"]
+    )
+with col_info:
+    info_box = st.empty()
 
 gdf_polygon = None
 gdf_points = None
