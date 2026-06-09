@@ -826,40 +826,40 @@ if gdf_polygon is not None:
             )
         ]
 
-       # ==========================================
-# CARI SUDUT TERJAUH DARI POLYGON
-# ==========================================
-poly_centroid = gdf_poly_3857.unary_union.centroid
-
-corners = {
-    "upper left":  (xmin, ymax),
-    "upper right": (xmax, ymax),
-    "lower left":  (xmin, ymin),
-    "lower right": (xmax, ymin)
-}
-
-max_dist = -1
-best_corner = "upper right"
-
-for loc, (x, y) in corners.items():
-
-    dist = (
-        (poly_centroid.x - x) ** 2 +
-        (poly_centroid.y - y) ** 2
-    )
-
-    if dist > max_dist:
-        max_dist = dist
-        best_corner = loc
-
-ax.legend(
-    handles=legend_elements,
-    loc=best_corner,
-    frameon=True,
-    facecolor="white",
-    framealpha=0.9,
-    edgecolor="black"
-)
+        # ==========================================
+        # CARI SUDUT TERJAUH DARI POLYGON
+        # ==========================================
+        poly_centroid = gdf_poly_3857.unary_union.centroid
+        
+        corners = {
+            "upper left":  (xmin, ymax),
+            "upper right": (xmax, ymax),
+            "lower left":  (xmin, ymin),
+            "lower right": (xmax, ymin)
+        }
+        
+        max_dist = -1
+        best_corner = "upper right"
+        
+        for loc, (x, y) in corners.items():
+        
+            dist = (
+                (poly_centroid.x - x) ** 2 +
+                (poly_centroid.y - y) ** 2
+            )
+        
+            if dist > max_dist:
+                max_dist = dist
+                best_corner = loc
+        
+        ax.legend(
+            handles=legend_elements,
+            loc=best_corner,
+            frameon=True,
+            facecolor="white",
+            framealpha=0.9,
+            edgecolor="black"
+        )
 
         buf = io.BytesIO()
 
