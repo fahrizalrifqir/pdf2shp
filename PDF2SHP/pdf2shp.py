@@ -562,10 +562,16 @@ if gdf_polygon is not None:
 # =========================================================
 st.subheader("Upload SHP ZIP Tapak")
 
-uploaded_tapak = st.file_uploader(
-    "Upload SHP ZIP Tapak",
-    type=["zip"]
-)
+col_tapak_upload, col_tapak_info = st.columns([3, 1])
+
+with col_tapak_upload:
+    uploaded_tapak = st.file_uploader(
+        "Upload SHP ZIP Tapak",
+        type=["zip"]
+    )
+
+with col_tapak_info:
+    tapak_info = st.empty()
 
 gdf_tapak = None
 
@@ -575,7 +581,9 @@ if uploaded_tapak and gdf_polygon is not None:
     if gdf_tapak is not None:
         gdf_tapak = fix_geometry(gdf_tapak)
 
-        st.success("SHP Tapak berhasil dibaca")
+        tapak_info.success(
+            "SHP Tapak\nberhasil dibaca"
+        )
 
         show_attributes(
             gdf_tapak,
