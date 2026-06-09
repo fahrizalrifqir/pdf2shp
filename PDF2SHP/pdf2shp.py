@@ -860,22 +860,29 @@ if gdf_polygon is not None:
             framealpha=0.9,
             edgecolor="black"
         )
+        with st.spinner("Membuat peta PNG..."):
+
+    fig.canvas.draw()
 
         buf = io.BytesIO()
-
+    
         plt.savefig(
             buf,
             format="png",
             bbox_inches="tight",
             dpi=300
         )
-
+    
         buf.seek(0)
+    
+        png_bytes = buf.getvalue()
         plt.close(fig)
-
+    
+        st.success("Peta PNG siap diunduh")
+        
         st.download_button(
             "⬇️ Download Peta PNG",
-            data=buf,
+            data=png_bytes,
             file_name="Peta_Overlay.png",
             mime="image/png"
         )
