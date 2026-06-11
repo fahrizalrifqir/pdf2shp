@@ -77,6 +77,122 @@ def get_utm_info(lon, lat):
 
     return epsg, f"{zone}{'N' if lat >= 0 else 'S'}"
 
+df_wilayah = pd.read_csv(
+    "Kecamatan.csv",
+    sep=";",
+    encoding="utf-8"
+)
+
+df_wilayah.columns = (
+    df_wilayah.columns
+    .astype(str)
+    .str.strip()
+)
+
+# =========================================================
+# SIDEBAR ZONA UTM
+# =========================================================
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🗺️ Zona UTM")
+
+provinsi = st.sidebar.selectbox(
+    "Provinsi",
+    [""] + sorted(
+        df_wilayah["PROVINSI"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+)
+
+df_filter = df_wilayah.copy()
+
+if provinsi:
+    df_filter = df_filter[
+        df_filter["PROVINSI"] == provinsi
+    ]
+
+kabupaten = st.sidebar.selectbox(
+    "Kabupaten/Kota",
+    [""] + sorted(
+        df_filter["KABUPATEN/KOTA"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+)
+
+if kabupaten:
+    df_filter = df_filter[
+        df_filter["KABUPATEN/KOTA"] == kabupaten
+    ]
+
+kecamatan = st.sidebar.selectbox(
+    "Kecamatan",
+    [""] + sorted(
+        df_filter["KECAMATAN"]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+)
+
+st.sidebar.markdown("---")
+
+if kecamatan:
+
+    df_zona = df_filter[
+        df_filter["KECAMATAN"] == kecamatan
+    ].copy()
+
+elif kabupaten:
+
+    df_zona = df_filter[
+        df_filter["KABUPATEN/KOTA"] == kabupaten
+    ].copy()
+
+elif provinsi:
+
+    df_zona = df_filter[
+        df_filter["PROVINSI"] == provinsi
+    ].copy()
+
+else:
+    df_zona = pd.DataFrame()
+
+if not df_zona.empty:
+
+    zona_list = []
+
+    for _, row in df_zona.iterrows():
+
+        try:
+            lon = float(row["X"])
+            lat = float(row["Y"])
+
+            epsg, zona = get_utm_info(lon, lat)
+
+            zona_list.append(
+                (zona, epsg)
+            )
+
+        except:
+            pass
+
+    zona_unik = sorted(set(zona_list))
+
+    st.sidebar.markdown("### Zona UTM")
+
+    for zona, epsg in zona_unik:
+
+        st.sidebar.success(
+            f"Zona UTM : {zona} | EPSG : {epsg}"
+        )
+
 # =========================================================
 # PARSE
 # =========================================================
@@ -143,18 +259,25 @@ def parse_any_coordinate(val):
 
     return dms_to_decimal(s)
 
-
 def normalize_lon_lat(a, b):
+
     if a is None or b is None:
         return None
 
-    if 95 <= a <= 141 and -11 <= b <= 6:
+    # lon lat normal
+    if 95 <= a <= 141 and -15 <= b <= 15:
         return (a, b)
 
-    if 95 <= b <= 141 and -11 <= a <= 6:
+    # lat lon tertukar
+    if 95 <= b <= 141 and -15 <= a <= 15:
         return (b, a)
 
+    # koordinat meter
+    if abs(a) > 1000 and abs(b) > 1000:
+        return (a, b)
+
     return None
+
 
 # =========================================================
 # GEOMETRY
@@ -207,18 +330,32 @@ def sort_coords_clockwise(coords):
 # PDF COORD PARSER
 # =========================================================
 def parse_coords_from_text_block(block):
+
     coords = []
 
     lines = block.splitlines()
 
     for line in lines:
-        nums = re.findall(r'[-+]?\d+(?:\.\d+)?', line)
+
+        nums = re.findall(
+            r'[-+]?\d+(?:\.\d+)?',
+            line
+        )
 
         if len(nums) >= 2:
-            a = parse_any_coordinate(nums[-2])
-            b = parse_any_coordinate(nums[-1])
 
-            xy = normalize_lon_lat(a, b)
+            a = parse_any_coordinate(
+                nums[-2]
+            )
+
+            b = parse_any_coordinate(
+                nums[-1]
+            )
+
+            xy = normalize_lon_lat(
+                a,
+                b
+            )
 
             if xy:
                 coords.append(xy)
@@ -226,18 +363,78 @@ def parse_coords_from_text_block(block):
     return coords
 
 
+def get_table_priority(text):
+
+    text = str(text).lower()
+
+    if "tabel koordinat yang disetujui" in text:
+        return 1
+
+    if "tabel koordinat yang dimohonkan" in text:
+        return 2
+
+    if "tabel koordinat yang dimohonkan dan disetujui" in text:
+        return 3
+
+    return 999
+
+
+def detect_coordinate_type(coords):
+
+    if not coords:
+        return "UNKNOWN"
+
+    xs = [x for x, y in coords]
+    ys = [y for x, y in coords]
+
+    try:
+
+        maxx = max(xs)
+        minx = min(xs)
+
+        maxy = max(ys)
+        miny = min(ys)
+
+        if (
+            90 <= minx <= 150 and
+            90 <= maxx <= 150 and
+            -15 <= miny <= 15 and
+            -15 <= maxy <= 15
+        ):
+            return "WGS84"
+
+        if (
+            100000 <= maxx <= 900000 and
+            1000000 <= maxy <= 10000000
+        ):
+            return "UTM"
+
+        if (
+            maxx > 1000 and
+            maxy > 1000
+        ):
+            return "TM3"
+
+    except:
+        pass
+
+    return "UNKNOWN"
+    
 def extract_tables_and_coords_from_pdf(uploaded_file):
 
     uploaded_file.seek(0)
 
-    coords_with_no = []
+    candidate_tables = []
 
-    # =====================================================
-    # PRIORITAS 1 : BACA SEMUA TABEL PDF
-    # =====================================================
     with pdfplumber.open(uploaded_file) as pdf:
 
-        for page in pdf.pages:
+        for page_no, page in enumerate(pdf.pages):
+
+            page_text = page.extract_text() or ""
+
+            priority = get_table_priority(
+                page_text
+            )
 
             try:
                 tables = page.extract_tables()
@@ -249,103 +446,148 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
                 if not table or len(table) < 2:
                     continue
 
-                try:
-                    df = pd.DataFrame(
-                        table[1:],
-                        columns=table[0]
-                    )
-                except:
-                    continue
+                candidate_tables.append({
+                    "priority": priority,
+                    "page": page_no,
+                    "table": table
+                })
 
-                df.columns = [
-                    re.sub(r"\s+", " ", str(c)).strip().lower()
-                    for c in df.columns
-                ]
-
-                no_col = None
-                bujur_col = None
-                lintang_col = None
-
-                for c in df.columns:
-
-                    if "no" in c:
-                        no_col = c
-
-                    if any(x in c for x in [
-                        "bujur",
-                        "longitude",
-                        "long",
-                        "x"
-                    ]):
-                        bujur_col = c
-
-                    if any(x in c for x in [
-                        "lintang",
-                        "latitude",
-                        "lat",
-                        "y"
-                    ]):
-                        lintang_col = c
-
-                if not (bujur_col and lintang_col):
-                    continue
-
-                for _, row in df.iterrows():
-
-                    lon = parse_any_coordinate(
-                        row.get(bujur_col)
-                    )
-
-                    lat = parse_any_coordinate(
-                        row.get(lintang_col)
-                    )
-
-                    xy = normalize_lon_lat(
-                        lon,
-                        lat
-                    )
-
-                    if not xy:
-                        continue
-
-                    try:
-                        n = int(
-                            str(
-                                row.get(no_col)
-                            ).strip()
-                        )
-                    except:
-                        n = 999999
-
-                    coords_with_no.append(
-                        (n, xy)
-                    )
-
-    # =====================================================
-    # JIKA TABEL BERHASIL DIBACA
-    # =====================================================
-    if coords_with_no:
-
-        coords_with_no.sort(
-            key=lambda x: x[0]
+    candidate_tables.sort(
+        key=lambda x: (
+            x["priority"],
+            x["page"]
         )
+    )
 
-        coords = [
-            xy
-            for _, xy in coords_with_no
+    for item in candidate_tables:
+
+        table = item["table"]
+
+        try:
+
+            df = pd.DataFrame(
+                table[1:],
+                columns=table[0]
+            )
+
+        except:
+            continue
+
+        df.columns = [
+            re.sub(
+                r"\s+",
+                " ",
+                str(c)
+            ).strip().lower()
+            for c in df.columns
         ]
 
-        return coords, True
+        no_col = None
+        x_col = None
+        y_col = None
 
-    # =====================================================
+        for c in df.columns:
+
+            if "no" in c:
+                no_col = c
+
+            if any(k in c for k in [
+                "bujur",
+                "longitude",
+                "long",
+                "x"
+            ]):
+                x_col = c
+
+            if any(k in c for k in [
+                "lintang",
+                "latitude",
+                "lat",
+                "y"
+            ]):
+                y_col = c
+
+        if not (x_col and y_col):
+            continue
+
+        coords_with_no = []
+
+        for _, row in df.iterrows():
+
+            try:
+
+                x = parse_any_coordinate(
+                    row.get(x_col)
+                )
+
+                y = parse_any_coordinate(
+                    row.get(y_col)
+                )
+
+                if x is None or y is None:
+                    continue
+
+                try:
+                    no = int(
+                        str(
+                            row.get(no_col)
+                        ).strip()
+                    )
+                except:
+                    no = 999999
+
+                xy = normalize_lon_lat(x, y)
+
+                if xy:
+                    coords_with_no.append(
+                        (no, xy)
+                    )
+
+            except:
+                continue
+
+        if len(coords_with_no) >= 3:
+
+            coords_with_no.sort(
+                key=lambda x: x[0]
+            )
+
+            coords = [
+                xy
+                for _, xy in coords_with_no
+            ]
+
+            coord_type = detect_coordinate_type(
+                coords
+            )
+
+            if coord_type == "TM3":
+
+                st.warning(
+                    "Koordinat TM3 terdeteksi. "
+                    "Saat ini format TM3 belum didukung aplikasi."
+                )
+            
+                return [], False, "TM3"
+            
+            return (
+                coords,
+                True,
+                coord_type
+            )
+
+    # =================================================
     # FALLBACK TEXT PARSER
-    # =====================================================
+    # =================================================
+
     uploaded_file.seek(0)
 
     full_text = ""
 
     with pdfplumber.open(uploaded_file) as pdf:
+
         for page in pdf.pages:
+
             full_text += (
                 page.extract_text() or ""
             ) + "\n"
@@ -355,9 +597,22 @@ def extract_tables_and_coords_from_pdf(uploaded_file):
     )
 
     if len(coords) >= 3:
-        return coords, True
 
-    return [], False
+        coord_type = detect_coordinate_type(
+            coords
+        )
+
+        return (
+            coords,
+            True,
+            coord_type
+        )
+
+    return (
+        [],
+        False,
+        "UNKNOWN"
+    )
 
 # =========================================================
 # SHP
@@ -427,6 +682,7 @@ with col_info:
 
 gdf_polygon = None
 gdf_points = None
+coord_type = "WGS84"
 # =========================================================
 # PROCESS PKKPR
 # =========================================================
@@ -434,19 +690,28 @@ if uploaded:
 
     if uploaded.name.lower().endswith(".pdf"):
 
-        coords, ordered = extract_tables_and_coords_from_pdf(uploaded)
+        coords, ordered, coord_type = (
+            extract_tables_and_coords_from_pdf(
+                uploaded
+            )
+        )
 
         if coords:
 
             # ==========================
             # TITIK KOORDINAT
             # ==========================
+            if coord_type == "WGS84":
+                source_crs = "EPSG:4326"
+            else:
+                source_crs = "EPSG:4326"
+            
             gdf_points = gpd.GeoDataFrame(
                 {
                     "No": list(range(1, len(coords) + 1))
                 },
                 geometry=[Point(x, y) for x, y in coords],
-                crs="EPSG:4326"
+                crs=source_crs
             )
 
             coords_proc = coords.copy()
@@ -465,7 +730,9 @@ if uploaded:
                 info_box.success(
                     f"""
                 Jumlah titik : {len(coords)}
-
+                
+                Jenis koordinat : {coord_type}
+                
                 Polygon valid : {"Ya" if poly_candidate.is_valid else "Tidak"}
                 """
                 )
@@ -488,7 +755,7 @@ if uploaded:
                 # ==========================
                 gdf_polygon = gpd.GeoDataFrame(
                     geometry=[poly_candidate],
-                    crs="EPSG:4326"
+                    crs=source_crs
                 )
 
             except Exception as e:
@@ -500,7 +767,10 @@ if uploaded:
                 gdf_polygon = None
 
         else:
-            st.error("Koordinat PDF tidak ditemukan")
+            if coord_type == "TM3":
+                pass
+            else:
+                st.error("Koordinat PDF tidak ditemukan")
 
     elif uploaded.name.lower().endswith(".zip"):
 
@@ -520,7 +790,10 @@ if uploaded:
 # =========================================================
 # LUAS + DOWNLOAD SHP
 # =========================================================
-if gdf_polygon is not None:
+if (
+    gdf_polygon is not None
+    and coord_type == "WGS84"
+):
     centroid = gdf_polygon.to_crs(4326).geometry.centroid.iloc[0]
 
     utm_epsg, utm_zone = get_utm_info(
@@ -593,7 +866,11 @@ if uploaded_tapak and gdf_polygon is not None:
 # =========================================================
 # OVERLAY
 # =========================================================
-if gdf_polygon is not None and gdf_tapak is not None:
+if ( 
+    gdf_polygon is not None
+    and gdf_tapak is not None
+    and coord_type == "WGS84"
+):
     st.subheader("Analisis Overlay")
 
     centroid = gdf_polygon.to_crs(4326).geometry.centroid.iloc[0]
@@ -636,7 +913,10 @@ if gdf_polygon is not None and gdf_tapak is not None:
     # =========================================================
 # PREVIEW MAP
 # =========================================================
-if gdf_polygon is not None:
+if (
+    gdf_polygon is not None
+    and coord_type == "WGS84"
+):
     st.subheader("Preview Peta")
 
     if gdf_tapak is not None:
@@ -759,15 +1039,15 @@ if gdf_polygon is not None:
                 edgecolor="red",
                 alpha=0.35,
                 linewidth=1.5,
-                zorder=4
+                zorder=5
             )
 
         gdf_poly_3857.plot(
             ax=ax,
             facecolor="none",
             edgecolor="yellow",
-            linewidth=2.5,
-            zorder=5
+            linewidth=0.5,
+            zorder=4
         )
 
         if gdf_points is not None and not gdf_points.empty:
@@ -812,6 +1092,16 @@ if gdf_polygon is not None:
         ax.axis("off")
 
         legend_elements = [
+            mlines.Line2D(
+                [],
+                [],
+                color="orange",
+                marker="o",
+                markeredgecolor="black",
+                linestyle="None",
+                markersize=8,
+                label="Titik PKKPR"
+            ),
             mpatches.Patch(
                 facecolor="none",
                 edgecolor="yellow",
@@ -823,16 +1113,6 @@ if gdf_polygon is not None:
                 edgecolor="red",
                 alpha=0.4,
                 label="Tapak"
-            ),
-            mlines.Line2D(
-                [],
-                [],
-                color="orange",
-                marker="o",
-                markeredgecolor="black",
-                linestyle="None",
-                markersize=8,
-                label="Titik PKKPR"
             )
         ]
 
