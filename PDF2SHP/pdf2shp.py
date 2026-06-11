@@ -77,8 +77,15 @@ def get_utm_info(lon, lat):
 
     return epsg, f"{zone}{'N' if lat >= 0 else 'S'}"
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+csv_path = os.path.join(
+    BASE_DIR,
+    "Kecamatan.csv"
+)
+
 df_wilayah = pd.read_csv(
-    "Kecamatan.csv",
+    csv_path,
     sep=";",
     encoding="utf-8"
 )
