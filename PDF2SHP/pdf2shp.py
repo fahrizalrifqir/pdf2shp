@@ -65,7 +65,14 @@ def get_utm_info(lon, lat):
     return epsg, f"{zone}{'N' if lat >= 0 else 'S'}"
 
 try:
-    df_wilayah = pd.read_csv("Kecamatan.csv", sep=";", encoding="utf-8")
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    CSV_PATH = os.path.join(BASE_DIR, "Kecamatan.csv")
+    
+    df_wilayah = pd.read_csv(
+        CSV_PATH,
+        sep=";",
+        encoding="utf-8"
+    )
     df_wilayah.columns = df_wilayah.columns.astype(str).str.strip()
 except:
     df_wilayah = pd.DataFrame(columns=["PROVINSI", "KABUPATEN/KOTA", "KECAMATAN", "X", "Y"])
